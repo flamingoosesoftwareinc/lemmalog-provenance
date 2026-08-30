@@ -38,7 +38,7 @@ cargo install --git ssh://git@github.com/flamingoosesoftwareinc/lemmalog-provena
      --provenance 'github://owner/repo/commit/path#L20-L35'
    ```
 
-   Pin source provenance to a commit and exact line range when possible. Use repeatable `--provenance` arguments for multiple sources. Provenance URIs are opaque, so another durable scheme is valid.
+   Pin source provenance to a commit and exact line range when possible. `--provenance` accepts an opaque URI string: Lemmalog stores and propagates it without interpreting or validating its scheme. Use `github:`, `git:`, `file:`, `https:`, `otel:`, or another durable scheme, and repeat the argument for multiple sources. Avoid tabs and newlines because the evidence sidecar is line-oriented.
 4. Before presenting or relying on a remembered claim, inspect its derivation:
 
    ```sh
