@@ -1,114 +1,43 @@
 ---
 name: lemmalog
-description: >-
-  Externalize working memory and logical state into the lemmalog Datalog
-  engine (MCP). Use for ANY multi-step task where state should outlive one
-  context window or span agents: long investigations, debugging sessions,
-  audits, multi-agent searches, systematic explorations, planning with many
-  interdependent constraints, anything needing provenance for its
-  conclusions. Trigger when lemmalog_ MCP tools are available and the task
-  involves accumulating verified facts, tracking hypotheses or status over
-  time, or repeatedly re-deriving the same relationships.
+description: Store and retrieve repository-scoped code facts with provenance. Use whenever investigating, searching, or explaining code, including architecture, behavior, dependencies, symbols, callers, references, and diagnostics.
 ---
 
-# Lemmalog — external working memory
+# Lemmalog
 
-`lemmalog` is a Datalog engine exposed as MCP tools. It is your working
-memory: assertions with provenance and confidence, derived consequences
-computed by rules, hypotheses with lifecycles — persistent across agents
-and context resets.
+Use Lemmalog as durable memory for code evidence. For every question about code, consult the repository store, then investigate with the normal code tools. Populate the store lazily as facts are verified; never scan the whole repository only to initialize it. Lemmalog resolves any file or directory path to its Git repository and initializes that repository's store on the first observation. Stores live under `$XDG_DATA_HOME/lemmalog/repositories` (normally `~/.local/share/lemmalog/repositories`), not in the repository.
 
-**The division of labor:** the engine owns state and consequence; you own
-perception and choice; every choice's outcome returns to the engine.
-A claim that isn't in the engine doesn't exist — nothing durable lives in
-your context.
+## Install
 
-## Setup
+If `lemmalog` is absent, install it once:
 
-- The `lemmalog_*` tools must be registered (see the README of the
-  lemmalog repo). If they are absent, tell the user the one-line
-  registration command and continue without memory — never block the task.
-- Persistence across sessions exists if `LEMMALOG_MCP_PATH` was set at
-  registration; `lemmalog_save` forces a snapshot.
-
-## The discipline
-
-1. **Assert as you verify.** The moment you confirm something — a call
-   edge, a config value, a decision, a step completed — assert it:
-   `S --rel[conf]--> O`. Omit the confidence tag for read-and-verified;
-   tag inferences `[0.4]`–`[0.7]`. Anchor evidence with
-   `located(Entity, "file:line")` (or any stable reference) so provenance
-   survives derivation. Never assert what you haven't checked.
-2. **Install rules when a pattern repeats.** If you ask the same shape of
-   question twice, write the Datalog for it: transitive closures, guard
-   tracking, status rollups, `count`/`min`/`max`/`sum` aggregates. Rules
-   are experiments: one named batch per analysis idea, validated on
-   install (rejections are spec feedback), backfilled against everything
-   already asserted, `lemmalog_uninstall` when the idea dies.
-3. **Query before re-reasoning.** Multi-hop, transitive, or
-   not-X-reachable questions go through rules and `lemmalog_query` —
-   never mental closure, and never re-deriving what a prior agent derived.
-   For grounded answering, `lemmalog_context` retrieves the question-relevant
-   facts plus their verbatim source episodes under a token budget — use it
-   instead of `lemmalog_dump` when preparing answers; selection beats
-   dumping.
-4. **`lemmalog_why` before trusting any derived fact.** The proof tree
-   shows which asserted edges carry it; a chain is only as good as its
-   lowest-confidence edge. Re-verify the weakest edges against their
-   `located` anchors.
-5. **Hypotheses have lifecycles.** `hypothesis(H, "claim")` plus
-   `status(H, proposed|supported|refuted|validated)` and evidence links.
-   Test counterfactuals with `lemmalog_what_if` — temporary facts,
-   answered goal, store untouched.
-6. **Reconcile vocabulary, don't enforce it.** Name things naturally;
-   when two names mean one thing, `local --alias_of[conf]--> canonical`
-   via `lemmalog_canonicalize`. Conflicts surface as `alias_conflict`
-   facts; they never silently merge.
-7. **Decide from queries.** Derive candidate views — unexplored items,
-   blocked-by-what, what-needs-attention — and choose among them. The
-   queries propose; you dispose (including off-list when judgment says
-   so). Then assert the decision so state stays complete.
-8. **Report from the engine.** Final deliverables render from queries and
-   `why` trees, not from memory. A conclusion's confidence is its minimum
-   edge confidence.
-
-## Schema conventions
-
-The only shared vocabulary (everything else: invent precisely, and assert
-`describes(Relation, "one-line meaning")` so others discover it):
-
-```text
-located(Entity, "ref")        % evidence anchor for anything in a source
-describes(Relation, "what")   % self-documenting schema
-hypothesis(H, "claim")        % lifecycle-tracked claims
-status(H, S)                  % proposed|supported|refuted|validated
-evidence(H, Fact)             % link a hypothesis to its supporting facts
-decision(Id, What)            % choices made, so state stays complete
+```sh
+cargo install --git ssh://git@github.com/flamingoosesoftwareinc/lemmalog-provenance.git --bin lemmalog --locked
 ```
 
-## Grammar
+## Use
 
-- Bare capitalized words are **variables** — quote entity names:
-  `reports_to("Alice", Y)`, never `reports_to(Alice, Y)`.
-- Fact line protocol: `S --rel[conf]--> O`, one per line.
-- Rule syntax: `head(X, Y) :- atom(X, Y), X \= Z.` with `!atom` negation,
-  `now(T)`, comparisons, arithmetic; aggregates only in heads.
-- Errors are actionable: every `isError` result carries the offending
-  input, the reason, and a hint — fix and resend; `lemmalog_observe`
-  reports dropped lines with reasons, so a zero-add result is loud, not
-  silent.
+1. Query relevant known facts before code discovery. An empty result means continue normally, not bootstrap a repository scan:
 
-## Anti-patterns
+   ```sh
+   lemmalog query <repo-path> 'current("subject", "predicate", O)'
+   ```
 
-- Guesses as untagged facts (tag low confidence or don't assert).
-- Batching assertions to the end (assert as you verify).
-- Encoding your judgment as rules (queries inform; you decide).
-- Trusting derived facts without `why`.
-- Re-deriving in context what the engine already closes.
-- Letting two names for one thing drift (alias them).
+2. Confirm claims with source, Git, LSP, or another primary tool. Lemmalog memory is evidence to inspect, not authority.
+3. Record concise, reusable relationships after confirmation:
 
-## Boundary
+   ```sh
+   lemmalog observe <file-or-repo-path> 'subject --predicate--> object' \
+     --provenance 'github://owner/repo/commit/path#L20-L35'
+   ```
 
-Stays in your head: in-flight reading, semantic judgment.
-Must land in the engine: conclusions, state changes, decisions — before
-you move on.
+   Pin source provenance to a commit and exact line range when possible. Use repeatable `--provenance` arguments for multiple sources. Provenance URIs are opaque, so another durable scheme is valid.
+4. Before presenting or relying on a remembered claim, inspect its derivation:
+
+   ```sh
+   lemmalog why <repo-path> 'current(subject, predicate, object)'
+   ```
+
+   Validate the cited source when it is available. Present the relevant provenance URI with every user-facing claim taken from Lemmalog; do not present stored or derived facts as uncited knowledge.
+
+Do not record guesses, transient implementation details, secrets, or facts without evidence. Do not access snapshot files directly or combine stores across repositories.

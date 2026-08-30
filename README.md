@@ -85,14 +85,11 @@ evaluation. Both caught by the differential harness.
 
 ## The lemmalog skill
 
-`skills/lemmalog/SKILL.md` in this crate is a generic agent skill that makes the engine the task's working memory for
-*any* long-running work — investigations, debugging, audits, multi-agent
-searches — not just one hardcoded workflow. It encodes the discipline the
-live experiments converged on (assert-as-you-verify with anchors and
-confidence, rules as experiments, query before re-reasoning, `why` before
-trusting, hypothesis lifecycles, decide-from-queries, report-from-the-engine),
-the minimal interop schema (`located`, `describes`, `hypothesis`/`status`,
-`decision`), the grammar gotchas, and the anti-patterns. Install per CLI:
+`skills/lemmalog/SKILL.md` teaches agents to use the repository-scoped CLI as
+durable code memory. It queries before normal code discovery, hydrates the
+store lazily as facts are verified, and requires commit-pinned provenance in
+user-facing answers. It never scans a repository only to initialize a store.
+Install the skill for your agent, for example:
 
 ```sh
 # Claude Code (user scope)
@@ -102,7 +99,7 @@ mkdir -p ~/.claude/skills && cp -r skills/lemmalog ~/.claude/skills/
 # (e.g. ~/.kimi/skills/lemmalog/ — see its skills docs)
 ```
 
-Task prompts then stay domain-specific and reference the skill in one line.
+Install the `lemmalog` binary separately as described under **Run** below.
 
 ## MCP server: use from Claude Code or Kimi CLI
 
