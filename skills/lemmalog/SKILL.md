@@ -1,6 +1,6 @@
 ---
 name: lemmalog
-description: Store and retrieve repository-scoped code facts with provenance. Use for code questions, investigations, debugging, audits, planning, or other multi-step work involving architecture, behavior, dependencies, symbols, callers, references, diagnostics, hypotheses, evidence, or decisions.
+description: Store and retrieve workspace-scoped code facts with repository boundaries and provenance. Use for code questions, investigations, debugging, audits, planning, or other multi-step work involving architecture, behavior, dependencies, symbols, callers, references, diagnostics, hypotheses, evidence, or decisions.
 ---
 
 # Lemmalog
@@ -40,6 +40,7 @@ cargo install --git ssh://git@github.com/flamingoosesoftwareinc/lemmalog-provena
 
    Pin source provenance to a commit and exact line range when possible. `--provenance` accepts an opaque URI string: Lemmalog stores and propagates it without interpreting or validating its scheme. Use `github:`, `git:`, `file:`, `https:`, `otel:`, or another durable scheme, and repeat the argument for multiple sources. Avoid tabs and newlines because the evidence sidecar is line-oriented.
    Observations default to the containing repository. Use `--scope workspace` only for a fact that applies across the workspace. Queries see all workspace repositories by default; use `--scope repository` for the target repository plus shared facts, or `--scope workspace` for shared facts only.
+   For an end-to-end join, query with one temporary Datalog rule, for example: `lemmalog query . 'flow(S) :- current("payments", "emits", E), current(E, "handled_by", S)'`.
 4. Before presenting or relying on a remembered claim, inspect its derivation:
 
    ```sh
