@@ -5,6 +5,10 @@ use lemmalog::session::Session;
 use std::io::{BufRead, IsTerminal, Write};
 
 fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if !args.is_empty() {
+        std::process::exit(lemmalog::cli::run(args));
+    }
     let mut session = Session::new();
     let interactive = std::io::stdin().is_terminal();
     if interactive {

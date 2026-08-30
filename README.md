@@ -666,6 +666,26 @@ m.why("current(alice, works_at, gigant)")?;          // proof tree -> episodes
 
 ## Run
 
+### Repository CLI
+
+The `lemmalog` binary is also a one-shot, repository-scoped CLI. Pass a file
+or directory inside any Git checkout; the command resolves the repository and
+stores its snapshot outside the checkout, keyed by the `origin` remote.
+
+```sh
+lemmalog observe /work/payments/src/db.rs \
+  'payment_service --uses--> postgres' \
+  --ts 100 --provenance 'github://acme/payments/abc123/src/db.rs#L20-L35' \
+  --captured-at 2026-08-29T19:42:00Z
+lemmalog query /work/payments 'current("payment_service", "uses", O)'
+lemmalog why /work/payments 'current(payment_service, uses, postgres)'
+```
+
+Each invocation loads one repository snapshot, performs one operation, saves
+mutations, and exits. Capture timestamps are kept in a sidecar next to the
+snapshot. Provenance values remain opaque to Lemmalog, so GitHub, Git, local
+files, LSP locations, and other evidence schemes can be supplied by callers.
+
 ```sh
 cargo run --bin lemmalog          # interactive REPL (or pipe a script)
 cargo test                         # 44 tests: engine (20) + agg (6) + agent (10) +

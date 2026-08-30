@@ -351,7 +351,7 @@ impl<X: Extractor> AgentMemory<X> {
         let candidates = self.extractor.extract(&episode);
         let mut report = IngestReport::default();
         for c in &candidates {
-            self.apply_update(c, &episode, &mut report);
+            self.apply_update(c, &episode, &mut report, &[]);
         }
         self.episodes.push(episode);
         self.escalations.extend(report.escalations.clone());
@@ -374,7 +374,7 @@ impl<X: Extractor> AgentMemory<X> {
         let candidates = self.extractor.extract(&episode);
         let mut report = IngestReport::default();
         for c in &candidates {
-            self.apply_update(c, &episode, &mut report);
+            self.apply_update(c, &episode, &mut report, &[]);
         }
         self.episodes.push(episode);
         self.escalations.extend(report.escalations.clone());
@@ -387,10 +387,18 @@ impl<X: Extractor> AgentMemory<X> {
     /// - open fact with different O:
     ///     - P exclusive                   -> UPDATE (close old, assert new)
     ///     - otherwise                     -> ADD + escalation
-    fn apply_update(&mut self, c: &CandidateFact, ep: &Episode, report: &mut IngestReport) {
+    fn apply_update(
+        &mut self,
+        c: &CandidateFact,
+        ep: &Episode,
+        report: &mut IngestReport,
+        provenance: &[String],
+    ) {
         let subj = self.engine.sym(&c.subj);
         let pred = self.engine.sym(&c.pred);
         let obj = self.engine.sym(&c.obj);
+        let mut fact_provenance = vec![ep.id.clone()];
+        fact_provenance.extend(provenance.iter().cloned());
         let open: Vec<Vec<Value>> = self
             .engine
             .query("edge", &[Some(subj), Some(pred), None, None, None, None])
@@ -399,7 +407,7 @@ impl<X: Extractor> AgentMemory<X> {
             .filter(|k| matches!(k[4].as_int(), Some(vt) if vt == i64::MAX))
             .collect();
         if open.is_empty() {
-            self.assert_open(&[subj, pred, obj], c.confidence, &ep.id);
+            self.assert_open(&[subj, pred, obj], c.confidence, &fact_provenance);
             report.added += 1;
             return;
         }
@@ -410,7 +418,7 @@ impl<X: Extractor> AgentMemory<X> {
             self.engine.declare(
                 "edge",
                 &k,
-                Ann::base(c.confidence, [ep.id.clone()]),
+                Ann::base(c.confidence, fact_provenance.iter().cloned()),
             );
             report.noop += 1;
             return;
@@ -423,10 +431,10 @@ impl<X: Extractor> AgentMemory<X> {
                 self.engine.retract("edge", old);
                 self.engine.declare("edge", &closed, Ann::base(0.9, ["superseded"]));
             }
-            self.assert_open(&[subj, pred, obj], c.confidence, &ep.id);
+            self.assert_open(&[subj, pred, obj], c.confidence, &fact_provenance);
             report.updated += 1;
         } else {
-            self.assert_open(&[subj, pred, obj], c.confidence, &ep.id);
+            self.assert_open(&[subj, pred, obj], c.confidence, &fact_provenance);
             let others: Vec<String> = open
                 .iter()
                 .map(|k| self.engine.interner.display(&k[2]))
@@ -439,7 +447,7 @@ impl<X: Extractor> AgentMemory<X> {
         }
     }
 
-    fn assert_open(&mut self, spo: &[Value; 3], conf: f64, prov: &str) {
+    fn assert_open(&mut self, spo: &[Value; 3], conf: f64, provenance: &[String]) {
         let args = vec![
             spo[0],
             spo[1],
@@ -448,7 +456,8 @@ impl<X: Extractor> AgentMemory<X> {
             Value::Int(i64::MAX),
             Value::Int(self.engine.now),
         ];
-        self.engine.declare("edge", &args, Ann::base(conf, [prov]));
+        self.engine
+            .declare("edge", &args, Ann::base(conf, provenance.iter().cloned()));
     }
 
     /// Advance time and run incremental maintenance (the sleep-time slot).
@@ -486,6 +495,18 @@ impl<X: Extractor> AgentMemory<X> {
         text: &str,
         ts: i64,
     ) -> (IngestReport, Vec<(String, String)>) {
+        self.observe_extracted_with_provenance(text, ts, &[])
+    }
+
+    /// Ingest protocol facts with opaque provenance references supplied by a
+    /// caller such as a repository-aware CLI. The episode id remains attached
+    /// as well, so existing proof trees and snapshots keep their behavior.
+    pub fn observe_extracted_with_provenance(
+        &mut self,
+        text: &str,
+        ts: i64,
+        provenance: &[String],
+    ) -> (IngestReport, Vec<(String, String)>) {
         self.engine.set_now(ts);
         let (candidates, dropped) = parse_protocol_reported(text, 0.9);
         self.episode_counter += 1;
@@ -497,7 +518,7 @@ impl<X: Extractor> AgentMemory<X> {
         };
         let mut report = IngestReport::default();
         for c in &candidates {
-            self.apply_update(c, &episode, &mut report);
+            self.apply_update(c, &episode, &mut report, provenance);
         }
         self.episodes.push(episode);
         self.escalations.extend(report.escalations.clone());
