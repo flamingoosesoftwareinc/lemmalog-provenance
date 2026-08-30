@@ -1,6 +1,6 @@
 ---
 name: lemmalog
-description: Store and retrieve repository-scoped code facts with provenance. Use whenever investigating, searching, or explaining code, including architecture, behavior, dependencies, symbols, callers, references, and diagnostics.
+description: Store and retrieve repository-scoped code facts with provenance. Use for code questions, investigations, debugging, audits, planning, or other multi-step work involving architecture, behavior, dependencies, symbols, callers, references, diagnostics, hypotheses, evidence, or decisions.
 ---
 
 # Lemmalog
@@ -14,6 +14,13 @@ If `lemmalog` is absent, install it once:
 ```sh
 cargo install --git ssh://git@github.com/flamingoosesoftwareinc/lemmalog-provenance.git --bin lemmalog --locked
 ```
+
+## When to use
+
+- Any code search, explanation, or investigation: consult existing facts first and record durable findings as you verify them.
+- Debugging or audits: track hypotheses, supporting or refuting evidence, and status changes.
+- Planning or review: record decisions and the verified relationships that justify them.
+- Specialist tools such as call graphs, coupling analysis, type comparison, and traces: preserve selected findings with their exact provenance.
 
 ## Use
 
@@ -39,5 +46,22 @@ cargo install --git ssh://git@github.com/flamingoosesoftwareinc/lemmalog-provena
    ```
 
    Validate the cited source when it is available. Present the relevant provenance URI with every user-facing claim taken from Lemmalog; do not present stored or derived facts as uncited knowledge.
+
+## Shared vocabulary
+
+These predicates are conventions, not enforced schema. Use them so later agents can query the same concepts:
+
+```sh
+lemmalog observe . 'h1 --hypothesis--> cache_causes_stale_reads' --provenance '<uri>'
+lemmalog observe . 'h1 --status--> proposed' --provenance '<uri>'
+lemmalog observe . 'h1 --evidence--> callgraph_finding_42' --provenance '<uri>'
+lemmalog observe . 'd1 --decision--> invalidate_cache_on_write' --provenance '<uri>'
+lemmalog query . 'current("h1", "status", S)'
+lemmalog why . 'current(h1, status, proposed)'
+```
+
+Move hypotheses through `proposed`, `supported`, `refuted`, or `validated` only when new evidence justifies the status. Record decisions after choosing, so later agents can recover both the outcome and its provenance.
+
+Use `describes` to define a project-specific predicate. The `evidence` predicate links facts in the model; `--provenance` cites the external source supporting an observation. Quote capitalized entity names in queries because bare capitalized words are variables.
 
 Do not record guesses, transient implementation details, secrets, or facts without evidence. Do not access snapshot files directly or combine stores across repositories.
