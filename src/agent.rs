@@ -308,6 +308,8 @@ pub struct AgentMemory<X: Extractor> {
 pub const DEFAULT_RULES: &str = "\
 # temporal projection: what is true NOW
 current(E,R,O) :- edge(E,R,O,VF,VT,_), now(T), VF =< T, T < VT.
+current(E,R,O) :- scoped_edge(_,E,R,O,VF,VT,_), now(T), VF =< T, T < VT.
+scoped_current(S,E,R,O) :- scoped_edge(S,E,R,O,VF,VT,_), now(T), VF =< T, T < VT.
 # curated exclusivity table for the update policy
 exclusive(\"works_at\").
 ";
@@ -523,6 +525,178 @@ impl<X: Extractor> AgentMemory<X> {
         self.episodes.push(episode);
         self.escalations.extend(report.escalations.clone());
         (report, dropped)
+    }
+
+    /// Ingest protocol facts into an explicit workspace or repository scope.
+    /// Scoped facts use a separate base relation so identical triples in two
+    /// repositories retain independent update histories.
+    pub fn observe_scoped_extracted_with_provenance(
+        &mut self,
+        text: &str,
+        ts: i64,
+        scope: &str,
+        provenance: &[String],
+    ) -> (IngestReport, Vec<(String, String)>) {
+        self.engine.set_now(ts);
+        let (candidates, dropped) = parse_protocol_reported(text, 0.9);
+        self.episode_counter += 1;
+        let episode = Episode {
+            id: format!("ep{}", self.episode_counter),
+            text: text.to_string(),
+            ts,
+            speaker: None,
+        };
+        let mut report = IngestReport::default();
+        for candidate in &candidates {
+            self.apply_scoped_update(candidate, &episode, &mut report, scope, provenance);
+        }
+        self.episodes.push(episode);
+        self.escalations.extend(report.escalations.clone());
+        (report, dropped)
+    }
+
+    fn apply_scoped_update(
+        &mut self,
+        candidate: &CandidateFact,
+        episode: &Episode,
+        report: &mut IngestReport,
+        scope: &str,
+        provenance: &[String],
+    ) {
+        let scope_value = self.engine.sym(scope);
+        let subj = self.engine.sym(&candidate.subj);
+        let pred = self.engine.sym(&candidate.pred);
+        let obj = self.engine.sym(&candidate.obj);
+        let mut fact_provenance = vec![episode.id.clone()];
+        fact_provenance.extend(provenance.iter().cloned());
+        let open: Vec<Vec<Value>> = self
+            .engine
+            .query(
+                "scoped_edge",
+                &[
+                    Some(scope_value),
+                    Some(subj),
+                    Some(pred),
+                    None,
+                    None,
+                    None,
+                    None,
+                ],
+            )
+            .into_iter()
+            .map(|(key, _)| key)
+            .filter(|key| matches!(key[5].as_int(), Some(valid_to) if valid_to == i64::MAX))
+            .collect();
+        if open.is_empty() {
+            self.assert_scoped_open(
+                &[scope_value, subj, pred, obj],
+                candidate.confidence,
+                &fact_provenance,
+            );
+            report.added += 1;
+            return;
+        }
+        if open.iter().any(|key| key[3] == obj) {
+            let mut key = open[0].clone();
+            key[3] = obj;
+            self.engine.declare(
+                "scoped_edge",
+                &key,
+                Ann::base(candidate.confidence, fact_provenance.iter().cloned()),
+            );
+            report.noop += 1;
+            return;
+        }
+        let exclusive = !self.engine.query("exclusive", &[Some(pred)]).is_empty();
+        if exclusive {
+            for old in &open {
+                let mut closed = old.clone();
+                closed[5] = Value::Int(self.engine.now);
+                self.engine.retract("scoped_edge", old);
+                self.engine
+                    .declare("scoped_edge", &closed, Ann::base(0.9, ["superseded"]));
+            }
+            self.assert_scoped_open(
+                &[scope_value, subj, pred, obj],
+                candidate.confidence,
+                &fact_provenance,
+            );
+            report.updated += 1;
+        } else {
+            self.assert_scoped_open(
+                &[scope_value, subj, pred, obj],
+                candidate.confidence,
+                &fact_provenance,
+            );
+            let others: Vec<String> = open
+                .iter()
+                .map(|key| self.engine.interner.display(&key[3]))
+                .collect();
+            report.escalations.push(format!(
+                "conflict in {scope}: {} --{}--> {} asserted in {}, but {} also open ({})",
+                candidate.subj,
+                candidate.pred,
+                candidate.obj,
+                episode.id,
+                candidate.pred,
+                others.join(", ")
+            ));
+            report.added += 1;
+        }
+    }
+
+    fn assert_scoped_open(
+        &mut self,
+        scoped_spo: &[Value; 4],
+        confidence: f64,
+        provenance: &[String],
+    ) {
+        let args = vec![
+            scoped_spo[0],
+            scoped_spo[1],
+            scoped_spo[2],
+            scoped_spo[3],
+            Value::Int(self.engine.now),
+            Value::Int(i64::MAX),
+            Value::Int(self.engine.now),
+        ];
+        self.engine.declare(
+            "scoped_edge",
+            &args,
+            Ann::base(confidence, provenance.iter().cloned()),
+        );
+    }
+
+    /// Restrict this in-memory view to selected scopes. Callers must not save
+    /// the filtered view over the complete workspace snapshot.
+    pub fn retain_scopes(&mut self, scopes: &[String]) {
+        let allowed: std::collections::HashSet<Value> =
+            scopes.iter().map(|scope| self.engine.sym(scope)).collect();
+        let keys: Vec<Vec<Value>> = self
+            .engine
+            .query("scoped_edge", &[None, None, None, None, None, None, None])
+            .into_iter()
+            .map(|(key, _)| key)
+            .filter(|key| !allowed.contains(&key[0]))
+            .collect();
+        for key in keys {
+            self.engine.retract("scoped_edge", &key);
+        }
+        self.engine.run();
+    }
+
+    /// Remove legacy unscoped facts from an in-memory filtered view.
+    pub fn remove_unscoped_facts(&mut self) {
+        let keys: Vec<Vec<Value>> = self
+            .engine
+            .query("edge", &[None, None, None, None, None, None])
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect();
+        for key in keys {
+            self.engine.retract("edge", &key);
+        }
+        self.engine.run();
     }
 
     /// Agent tool surface: install a rule batch (versioned, revertable).

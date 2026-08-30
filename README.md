@@ -663,11 +663,21 @@ m.why("current(alice, works_at, gigant)")?;          // proof tree -> episodes
 
 ## Run
 
-### Repository CLI
+### Workspace CLI
 
-The `lemmalog` binary is also a one-shot, repository-scoped CLI. Pass a file
-or directory inside any Git checkout; the command resolves the repository and
-stores its snapshot outside the checkout, keyed by the `origin` remote.
+The `lemmalog` binary is also a one-shot, workspace-aware CLI. Pass a file or
+directory inside any Git checkout. Without configuration, its Git root is an
+isolated workspace, preserving repository-scoped behavior. For a workspace of
+multiple repositories, add this marker at their common ancestor:
+
+```toml
+# .lemmalog
+id = "company-platform"
+```
+
+Resolution uses `--workspace <path>`, the nearest ancestor `.lemmalog`, or the
+Git root fallback, in that order. Marked workspaces use one durable snapshot;
+facts retain workspace or repository scope within it.
 
 ```sh
 lemmalog observe /work/payments/src/db.rs \
@@ -676,12 +686,20 @@ lemmalog observe /work/payments/src/db.rs \
   --captured-at 2026-08-29T19:42:00Z
 lemmalog query /work/payments 'current("payment_service", "uses", O)'
 lemmalog why /work/payments 'current(payment_service, uses, postgres)'
+lemmalog observe /work/payments 'PaymentSettled --means--> completed_payment' \
+  --scope workspace --provenance 'git://payments/abc123/events.go#L10-L18'
+lemmalog query /work/payments \
+  'flow(S) :- current("payments", "emits", E), current(E, "handled_by", S)'
 ```
 
-Each invocation loads one repository snapshot, performs one operation, saves
-mutations, and exits. Capture timestamps are kept in a sidecar next to the
-snapshot. Provenance values remain opaque to Lemmalog, so GitHub, Git, local
-files, LSP locations, and other evidence schemes can be supplied by callers.
+Observations default to repository scope. Queries see the resolved workspace by
+default; `--scope repository` selects the target repository plus shared
+workspace facts, and `--scope workspace` selects shared facts only. Each
+invocation loads one snapshot, performs one operation, saves mutations, and
+exits. Capture timestamps are kept in a sidecar. Provenance values remain
+opaque, so GitHub, Git, local files, LSP locations, and other evidence schemes
+can be supplied by callers. Stores live under the user data directory, outside
+the workspace.
 
 ```sh
 cargo run --bin lemmalog          # interactive REPL (or pipe a script)

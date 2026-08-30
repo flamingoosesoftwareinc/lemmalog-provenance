@@ -5,7 +5,7 @@ description: Store and retrieve repository-scoped code facts with provenance. Us
 
 # Lemmalog
 
-Use Lemmalog as durable memory for code evidence. For every question about code, consult the repository store, then investigate with the normal code tools. Populate the store lazily as facts are verified; never scan the whole repository only to initialize it. Lemmalog resolves any file or directory path to its Git repository and initializes that repository's store on the first observation. Stores live under `$XDG_DATA_HOME/lemmalog/repositories` (normally `~/.local/share/lemmalog/repositories`), not in the repository.
+Use Lemmalog as durable memory for code evidence. For every question about code, consult the resolved workspace store, then investigate with the normal code tools. Populate the store lazily as facts are verified; never scan the whole workspace only to initialize it. Lemmalog resolves `--workspace`, the nearest ancestor `.lemmalog` marker, or the target Git root fallback, in that order. A `.lemmalog` file contains `id = "stable-workspace-id"`. Stores live under `$XDG_DATA_HOME/lemmalog` (normally `~/.local/share/lemmalog`), not in the workspace.
 
 ## Install
 
@@ -39,6 +39,7 @@ cargo install --git ssh://git@github.com/flamingoosesoftwareinc/lemmalog-provena
    ```
 
    Pin source provenance to a commit and exact line range when possible. `--provenance` accepts an opaque URI string: Lemmalog stores and propagates it without interpreting or validating its scheme. Use `github:`, `git:`, `file:`, `https:`, `otel:`, or another durable scheme, and repeat the argument for multiple sources. Avoid tabs and newlines because the evidence sidecar is line-oriented.
+   Observations default to the containing repository. Use `--scope workspace` only for a fact that applies across the workspace. Queries see all workspace repositories by default; use `--scope repository` for the target repository plus shared facts, or `--scope workspace` for shared facts only.
 4. Before presenting or relying on a remembered claim, inspect its derivation:
 
    ```sh

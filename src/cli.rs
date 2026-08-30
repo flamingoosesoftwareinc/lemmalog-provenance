@@ -1,6 +1,6 @@
-//! Repository-scoped command-line access to Lemmalog memory.
+//! Workspace-aware command-line access to Lemmalog memory.
 //!
-//! The CLI is deliberately a one-shot boundary: resolve one repository,
+//! The CLI is deliberately a one-shot boundary: resolve one workspace,
 //! load its snapshot, perform one operation, save mutations, and exit.
 
 use crate::{AgentMemory, MockExtractor};
@@ -13,25 +13,54 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const USAGE: &str = "Usage:
   lemmalog                         start the interactive REPL
   lemmalog observe <path> <facts> [options]
-  lemmalog query <path> <goal>
-  lemmalog why <path> <fact>
+  lemmalog query <path> <goal> [options]
+  lemmalog why <path> <fact> [options]
 
-Options for observe:
+Workspace and scope options:
+  --workspace <path>               override .lemmalog workspace discovery
+  --scope <repository|workspace>   observation scope (default: repository)
+  --scope <all|repository|workspace>
+                                   query/why visibility (default: all)
+
+Other observe options:
   --ts <unix-seconds>              fact validity/assertion time (default: now)
   --provenance <uri>               opaque evidence URI (repeatable)
   --captured-at <timestamp>        evidence capture time (default: now, RFC3339)
 
-The path may name any file or directory inside a Git repository. The
-repository snapshot is stored outside the checkout under the user data
-directory, keyed by its Git remote (or canonical root for an unremoted repo).
+The target path may name any file or directory inside a Git repository.
+Lemmalog uses an explicit workspace override, the nearest ancestor .lemmalog
+marker, or the Git root fallback, in that order. Stores remain outside the
+workspace under the user data directory. A marker contains id = \"stable-id\";
+an override names that marker or its directory. A query goal may be one atom
+or a temporary Datalog rule whose head is returned.
 ";
 
 #[derive(Debug)]
 struct Repository {
     root: PathBuf,
     identity: String,
+}
+
+#[derive(Debug)]
+struct Workspace {
+    root: PathBuf,
+    identity: String,
+    marked: bool,
     snapshot: PathBuf,
     evidence: PathBuf,
+}
+
+#[derive(Debug)]
+struct Context {
+    repository: Repository,
+    workspace: Workspace,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Scope {
+    All,
+    Repository,
+    Workspace,
 }
 
 pub fn run(args: impl IntoIterator<Item = String>) -> i32 {
@@ -64,17 +93,25 @@ fn command(args: Vec<String>) -> Result<String, String> {
 }
 
 fn observe(args: &[String]) -> Result<String, String> {
-    if args.len() < 2 {
-        return Err("observe requires <path> and one quoted facts argument".to_string());
-    }
-    let repo = repository(Path::new(&args[0]))?;
-    let facts = &args[1];
+    let mut positional = Vec::new();
     let mut ts = current_unix_seconds();
     let mut uris = Vec::new();
     let mut captured_at = None;
-    let mut i = 2;
+    let mut workspace_override = None;
+    let mut scope = Scope::Repository;
+    let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            "--workspace" => {
+                i += 1;
+                workspace_override = Some(PathBuf::from(
+                    args.get(i).ok_or("--workspace requires a path")?,
+                ));
+            }
+            "--scope" => {
+                i += 1;
+                scope = parse_scope(args.get(i).ok_or("--scope requires a value")?, false)?;
+            }
             "--ts" => {
                 i += 1;
                 ts = args
@@ -99,22 +136,34 @@ fn observe(args: &[String]) -> Result<String, String> {
                 }
                 captured_at = Some(value.clone());
             }
-            other => return Err(format!("unknown observe option {other:?}")),
+            other if other.starts_with('-') => {
+                return Err(format!("unknown observe option {other:?}"));
+            }
+            _ => positional.push(args[i].clone()),
         }
         i += 1;
+    }
+    if positional.len() != 2 {
+        return Err("observe requires <path> and one quoted facts argument".to_string());
     }
     if captured_at.is_some() && uris.is_empty() {
         return Err("--captured-at requires at least one --provenance URI".to_string());
     }
 
-    let mut memory = load_memory(&repo)?;
-    let (report, dropped) = memory.observe_extracted_with_provenance(facts, ts, &uris);
+    let context = resolve_context(Path::new(&positional[0]), workspace_override.as_deref())?;
+    let mut memory = load_memory(&context.workspace)?;
+    let scope_name = scope_name(&context, scope);
+    let (report, dropped) = if context.workspace.marked || scope == Scope::Workspace {
+        memory.observe_scoped_extracted_with_provenance(&positional[1], ts, &scope_name, &uris)
+    } else {
+        memory.observe_extracted_with_provenance(&positional[1], ts, &uris)
+    };
     memory.maintain(ts);
-    if let Some(parent) = repo.snapshot.parent() {
+    if let Some(parent) = context.workspace.snapshot.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("create data directory: {e}"))?;
     }
     memory
-        .save(path_string(&repo.snapshot).as_str())
+        .save(path_string(&context.workspace.snapshot).as_str())
         .map_err(|e| format!("save snapshot: {e}"))?;
 
     let captured_at = if uris.is_empty() {
@@ -124,22 +173,25 @@ fn observe(args: &[String]) -> Result<String, String> {
     };
     if let Some(captured_at) = captured_at {
         let capture_time = captured_at;
-        let mut evidence = read_evidence(&repo.evidence)?;
+        let mut evidence = read_evidence(&context.workspace.evidence)?;
         for uri in &uris {
             evidence.insert(uri.clone(), capture_time.clone());
         }
-        write_evidence(&repo.evidence, &evidence)?;
+        write_evidence(&context.workspace.evidence, &evidence)?;
     }
 
     let mut output = format!(
-        "repository={}\nroot={}\nadded={} updated={} noop={} escalations={}\nsnapshot={}",
-        repo.identity,
-        repo.root.display(),
+        "workspace={}\nworkspace_root={}\nrepository={}\nroot={}\nscope={}\nadded={} updated={} noop={} escalations={}\nsnapshot={}",
+        context.workspace.identity,
+        context.workspace.root.display(),
+        context.repository.identity,
+        context.repository.root.display(),
+        scope_name,
         report.added,
         report.updated,
         report.noop,
         report.escalations.len(),
-        repo.snapshot.display()
+        context.workspace.snapshot.display()
     );
     for escalation in report.escalations {
         output.push_str(&format!("\nescalation: {escalation}"));
@@ -151,17 +203,14 @@ fn observe(args: &[String]) -> Result<String, String> {
 }
 
 fn query(args: &[String], deep: bool) -> Result<String, String> {
-    if args.len() != 2 {
-        return Err("query requires <path> and one quoted goal argument".to_string());
-    }
-    let repo = repository(Path::new(&args[0]))?;
-    let mut memory = load_memory(&repo)?;
+    let (path, goal, workspace_override, scope) = parse_read_args(args, "query")?;
+    let context = resolve_context(&path, workspace_override.as_deref())?;
+    let mut memory = load_memory(&context.workspace)?;
+    restrict_scope(&mut memory, &context, scope);
     let rows = if deep {
-        memory
-            .ask_deep(&args[1])
-            .map_err(|e| format!("query: {e}"))?
+        memory.ask_deep(&goal).map_err(|e| format!("query: {e}"))?
     } else {
-        memory.ask(&args[1]).map_err(|e| format!("query: {e}"))?
+        ask_expression(&mut memory, &goal)?
     };
     Ok(if rows.is_empty() {
         "(no answers)".to_string()
@@ -171,13 +220,12 @@ fn query(args: &[String], deep: bool) -> Result<String, String> {
 }
 
 fn why(args: &[String]) -> Result<String, String> {
-    if args.len() != 2 {
-        return Err("why requires <path> and one quoted fact argument".to_string());
-    }
-    let repo = repository(Path::new(&args[0]))?;
-    let memory = load_memory(&repo)?;
-    let proof = memory.why(&args[1]);
-    let evidence = read_evidence(&repo.evidence)?;
+    let (path, fact, workspace_override, scope) = parse_read_args(args, "why")?;
+    let context = resolve_context(&path, workspace_override.as_deref())?;
+    let mut memory = load_memory(&context.workspace)?;
+    restrict_scope(&mut memory, &context, scope);
+    let proof = memory.why(&fact);
+    let evidence = read_evidence(&context.workspace.evidence)?;
     let mut output = proof;
     for (uri, captured_at) in evidence {
         if output.contains(&uri) {
@@ -187,12 +235,12 @@ fn why(args: &[String]) -> Result<String, String> {
     Ok(output.trim_end().to_string())
 }
 
-fn repository(path: &Path) -> Result<Repository, String> {
+fn resolve_context(path: &Path, workspace_override: Option<&Path>) -> Result<Context, String> {
     let path = path
         .canonicalize()
         .map_err(|e| format!("cannot resolve path {}: {e}", path.display()))?;
     let git_dir = if path.is_dir() {
-        path
+        path.clone()
     } else {
         path.parent()
             .ok_or_else(|| format!("path {} has no parent", path.display()))?
@@ -205,27 +253,225 @@ fn repository(path: &Path) -> Result<Repository, String> {
         .map(|remote| remote.trim().to_string())
         .filter(|remote| !remote.is_empty())
         .unwrap_or_else(|| root.display().to_string());
+    let repository = Repository { root, identity };
+    let marker = match workspace_override {
+        Some(path) => Some(explicit_marker(path)?),
+        None => find_marker(&path),
+    };
     let data_root = data_root()?;
-    let key = stable_key(&identity);
-    let directory = data_root.join("lemmalog").join("repositories");
-    Ok(Repository {
-        root,
-        identity,
-        snapshot: directory.join(format!("{key}.snapshot")),
-        evidence: directory.join(format!("{key}.evidence")),
+    let workspace = if let Some(marker) = marker {
+        let id = read_workspace_id(&marker)?;
+        let identity = format!("workspace:{id}");
+        let key = stable_key(&identity);
+        let directory = data_root.join("lemmalog").join("workspaces");
+        Workspace {
+            root: marker
+                .parent()
+                .expect("workspace marker has parent")
+                .to_path_buf(),
+            identity,
+            marked: true,
+            snapshot: directory.join(format!("{key}.snapshot")),
+            evidence: directory.join(format!("{key}.evidence")),
+        }
+    } else {
+        let key = stable_key(&repository.identity);
+        let directory = data_root.join("lemmalog").join("repositories");
+        Workspace {
+            root: repository.root.clone(),
+            identity: repository.identity.clone(),
+            marked: false,
+            snapshot: directory.join(format!("{key}.snapshot")),
+            evidence: directory.join(format!("{key}.evidence")),
+        }
+    };
+    Ok(Context {
+        repository,
+        workspace,
     })
 }
 
-fn load_memory(repo: &Repository) -> Result<AgentMemory<MockExtractor>, String> {
-    if repo.snapshot.exists() {
+fn load_memory(workspace: &Workspace) -> Result<AgentMemory<MockExtractor>, String> {
+    if workspace.snapshot.exists() {
         AgentMemory::load(
             MockExtractor::new(0.9),
-            path_string(&repo.snapshot).as_str(),
+            path_string(&workspace.snapshot).as_str(),
         )
         .map_err(|e| format!("load snapshot: {e}"))
     } else {
         AgentMemory::new(MockExtractor::new(0.9), "").map_err(|e| format!("create memory: {e}"))
     }
+}
+
+fn parse_scope(value: &str, allow_all: bool) -> Result<Scope, String> {
+    match value {
+        "all" if allow_all => Ok(Scope::All),
+        "repository" => Ok(Scope::Repository),
+        "workspace" => Ok(Scope::Workspace),
+        _ if allow_all => Err("--scope must be all, repository, or workspace".to_string()),
+        _ => Err("--scope must be repository or workspace".to_string()),
+    }
+}
+
+fn parse_read_args(
+    args: &[String],
+    command: &str,
+) -> Result<(PathBuf, String, Option<PathBuf>, Scope), String> {
+    let mut positional = Vec::new();
+    let mut workspace = None;
+    let mut scope = Scope::All;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--workspace" => {
+                index += 1;
+                workspace = Some(PathBuf::from(
+                    args.get(index).ok_or("--workspace requires a path")?,
+                ));
+            }
+            "--scope" => {
+                index += 1;
+                scope = parse_scope(args.get(index).ok_or("--scope requires a value")?, true)?;
+            }
+            option if option.starts_with('-') => {
+                return Err(format!("unknown {command} option {option:?}"));
+            }
+            _ => positional.push(args[index].clone()),
+        }
+        index += 1;
+    }
+    if positional.len() != 2 {
+        return Err(format!(
+            "{command} requires <path> and one quoted {} argument",
+            if command == "why" { "fact" } else { "goal" }
+        ));
+    }
+    Ok((
+        PathBuf::from(&positional[0]),
+        positional.remove(1),
+        workspace,
+        scope,
+    ))
+}
+
+fn scope_name(context: &Context, scope: Scope) -> String {
+    match scope {
+        Scope::Workspace => "workspace".to_string(),
+        Scope::Repository => format!("repository:{}", context.repository.identity),
+        Scope::All => unreachable!("all is not an observation scope"),
+    }
+}
+
+fn restrict_scope(memory: &mut AgentMemory<MockExtractor>, context: &Context, scope: Scope) {
+    match scope {
+        Scope::All => {}
+        Scope::Workspace => {
+            memory.retain_scopes(&["workspace".to_string()]);
+            memory.remove_unscoped_facts();
+        }
+        Scope::Repository => {
+            memory.retain_scopes(&[
+                "workspace".to_string(),
+                scope_name(context, Scope::Repository),
+            ]);
+            if context.workspace.marked {
+                memory.remove_unscoped_facts();
+            }
+        }
+    }
+}
+
+fn ask_expression(
+    memory: &mut AgentMemory<MockExtractor>,
+    expression: &str,
+) -> Result<Vec<String>, String> {
+    let Some((head, _)) = expression.split_once(":-") else {
+        return memory.ask(expression).map_err(|e| format!("query: {e}"));
+    };
+    let head = head.trim();
+    if head.is_empty() {
+        return Err("query rule requires a head atom".to_string());
+    }
+    let rule = if expression.trim_end().ends_with('.') {
+        expression.to_string()
+    } else {
+        format!("{expression}.")
+    };
+    memory
+        .install_rules(&rule)
+        .map_err(|e| format!("query rule: {e}"))?;
+    memory.maintain(memory.engine.now);
+    memory.ask(head).map_err(|e| format!("query: {e}"))
+}
+
+fn find_marker(path: &Path) -> Option<PathBuf> {
+    let mut directory = if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent()?.to_path_buf()
+    };
+    loop {
+        let marker = directory.join(".lemmalog");
+        if marker.is_file() {
+            return Some(marker);
+        }
+        if !directory.pop() {
+            return None;
+        }
+    }
+}
+
+fn explicit_marker(path: &Path) -> Result<PathBuf, String> {
+    let path = path
+        .canonicalize()
+        .map_err(|e| format!("cannot resolve workspace {}: {e}", path.display()))?;
+    let marker = if path.is_dir() {
+        path.join(".lemmalog")
+    } else {
+        path
+    };
+    if marker.file_name().and_then(|name| name.to_str()) != Some(".lemmalog") || !marker.is_file() {
+        return Err(format!(
+            "workspace override {} has no .lemmalog marker",
+            marker.display()
+        ));
+    }
+    Ok(marker)
+}
+
+fn read_workspace_id(marker: &Path) -> Result<String, String> {
+    let text = std::fs::read_to_string(marker)
+        .map_err(|e| format!("read workspace marker {}: {e}", marker.display()))?;
+    let id = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .find_map(|line| {
+            let value = line
+                .strip_prefix("id")?
+                .trim_start()
+                .strip_prefix('=')?
+                .trim();
+            let value = value.strip_prefix('"')?.strip_suffix('"')?;
+            Some(value.to_string())
+        })
+        .ok_or_else(|| {
+            format!(
+                "workspace marker {} requires id = \"...\"",
+                marker.display()
+            )
+        })?;
+    if id.is_empty()
+        || !id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "._-".contains(character))
+    {
+        return Err(format!(
+            "workspace marker {} has invalid id {id:?}",
+            marker.display()
+        ));
+    }
+    Ok(id)
 }
 
 fn data_root() -> Result<PathBuf, String> {

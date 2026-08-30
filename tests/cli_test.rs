@@ -159,3 +159,243 @@ fn cli_keeps_repository_snapshots_isolated() {
 
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn marked_workspace_joins_repositories_and_preserves_scope() {
+    let root = temp_root("workspace");
+    let workspace = root.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(workspace.join(".lemmalog"), "id = \"billing-platform\"\n").unwrap();
+    let first = repository(&workspace.join("first"), "git@github.com:example/first.git");
+    let second = repository(
+        &workspace.join("second"),
+        "git@github.com:example/second.git",
+    );
+    let data = root.join("data");
+
+    let observations = [
+        (&first, "service_a --emits--> payment_created", "repository"),
+        (
+            &second,
+            "payment_created --handled_by--> service_b",
+            "repository",
+        ),
+        (
+            &first,
+            "payment_created --means--> settled_payment",
+            "workspace",
+        ),
+        (&first, "alice --works_at--> acme", "repository"),
+        (&second, "alice --works_at--> globex", "repository"),
+    ];
+    for (repo, fact, scope) in observations {
+        let output = cli()
+            .env("XDG_DATA_HOME", &data)
+            .args([
+                "observe",
+                repo.to_str().unwrap(),
+                fact,
+                "--scope",
+                scope,
+                "--ts",
+                "100",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let joined = cli()
+        .env("XDG_DATA_HOME", &data)
+        .args([
+            "query",
+            first.to_str().unwrap(),
+            "flow(X) :- current(\"service_a\", \"emits\", E), current(E, \"handled_by\", X)",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(joined.stdout).unwrap().trim(),
+        "X=service_b"
+    );
+
+    let repository_fact = cli()
+        .env("XDG_DATA_HOME", &data)
+        .args([
+            "query",
+            first.to_str().unwrap(),
+            "current(\"alice\", \"works_at\", O)",
+            "--scope",
+            "repository",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(repository_fact.stdout).unwrap().trim(),
+        "O=acme"
+    );
+
+    let shared_fact = cli()
+        .env("XDG_DATA_HOME", &data)
+        .args([
+            "query",
+            second.to_str().unwrap(),
+            "current(\"payment_created\", \"means\", O)",
+            "--scope",
+            "repository",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(shared_fact.stdout).unwrap().trim(),
+        "O=settled_payment"
+    );
+
+    let hidden_repository_fact = cli()
+        .env("XDG_DATA_HOME", &data)
+        .args([
+            "query",
+            first.to_str().unwrap(),
+            "current(\"payment_created\", \"handled_by\", O)",
+            "--scope",
+            "repository",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(hidden_repository_fact.stdout)
+            .unwrap()
+            .trim(),
+        "(no answers)"
+    );
+
+    let provenance = "github://example/first/abc123/src/lib.rs#L1-L1";
+    let cited = cli()
+        .env("XDG_DATA_HOME", &data)
+        .args([
+            "observe",
+            first.to_str().unwrap(),
+            "service_a --owns--> payment_ledger",
+            "--provenance",
+            provenance,
+            "--captured-at",
+            "2026-08-30T10:00:00Z",
+            "--ts",
+            "100",
+        ])
+        .output()
+        .unwrap();
+    assert!(cited.status.success());
+    let explained = cli()
+        .env("XDG_DATA_HOME", &data)
+        .args([
+            "why",
+            second.to_str().unwrap(),
+            "current(service_a, owns, payment_ledger)",
+        ])
+        .output()
+        .unwrap();
+    let explanation = String::from_utf8(explained.stdout).unwrap();
+    assert!(explanation.lines().any(|line| {
+        line == format!("evidence: {provenance} (captured_at=2026-08-30T10:00:00Z)")
+    }));
+    let cited_scope = cli()
+        .env("XDG_DATA_HOME", &data)
+        .args([
+            "query",
+            second.to_str().unwrap(),
+            "scoped_current(S, \"service_a\", \"owns\", \"payment_ledger\")",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(cited_scope.stdout).unwrap().trim(),
+        "S=repository:git@github.com:example/first.git"
+    );
+
+    let snapshots = std::fs::read_dir(data.join("lemmalog/workspaces"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry.path().extension().and_then(|value| value.to_str()) == Some("snapshot")
+        })
+        .count();
+    assert_eq!(snapshots, 1);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn explicit_workspace_override_and_nearest_marker_are_deterministic() {
+    let root = temp_root("workspace-resolution");
+    let outer = root.join("outer");
+    let nested = outer.join("nested");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(outer.join(".lemmalog"), "id = \"outer\"\n").unwrap();
+    std::fs::write(nested.join(".lemmalog"), "id = \"nested\"\n").unwrap();
+    let nested_repo = repository(&nested.join("service"), "git@github.com:example/nested.git");
+    let outside_repo = repository(&root.join("outside"), "git@github.com:example/outside.git");
+    let data = root.join("data");
+
+    let nested_observation = cli()
+        .env("XDG_DATA_HOME", &data)
+        .args([
+            "observe",
+            nested_repo.to_str().unwrap(),
+            "nested_service --belongs_to--> nested_workspace",
+            "--ts",
+            "100",
+        ])
+        .output()
+        .unwrap();
+    assert!(nested_observation.status.success());
+
+    let override_observation = cli()
+        .env("XDG_DATA_HOME", &data)
+        .args([
+            "observe",
+            outside_repo.to_str().unwrap(),
+            "outside_service --belongs_to--> outer_workspace",
+            "--workspace",
+            outer.to_str().unwrap(),
+            "--ts",
+            "100",
+        ])
+        .output()
+        .unwrap();
+    assert!(override_observation.status.success());
+
+    let nested_isolated = cli()
+        .env("XDG_DATA_HOME", &data)
+        .args([
+            "query",
+            nested_repo.to_str().unwrap(),
+            "current(\"outside_service\", \"belongs_to\", O)",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(nested_isolated.stdout).unwrap().trim(),
+        "(no answers)"
+    );
+
+    let override_visible = cli()
+        .env("XDG_DATA_HOME", &data)
+        .args([
+            "query",
+            outside_repo.to_str().unwrap(),
+            "current(\"outside_service\", \"belongs_to\", O)",
+            "--workspace",
+            outer.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(override_visible.stdout).unwrap().trim(),
+        "O=outer_workspace"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
