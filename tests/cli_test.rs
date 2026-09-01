@@ -83,7 +83,7 @@ fn cli_persists_and_explains_repository_facts_from_outside_checkout() {
     let outside = root.join("outside");
     let data = root.join("data");
     std::fs::create_dir(&outside).unwrap();
-    let provenance = "github://example/persistence/abc123/src/lib.rs#L1-L1";
+    let provenance = "https://github.com/example/persistence/blob/abc123/src/lib.rs#L1";
 
     let observed = cli()
         .current_dir(&outside)
@@ -310,7 +310,7 @@ fn marked_workspace_joins_repositories_and_preserves_scope() {
         "(no answers)"
     );
 
-    let provenance = "github://example/first/abc123/src/lib.rs#L1-L1";
+    let provenance = "https://github.com/example/first/blob/abc123/src/lib.rs#L1";
     let cited = cli()
         .env("XDG_DATA_HOME", &data)
         .args([

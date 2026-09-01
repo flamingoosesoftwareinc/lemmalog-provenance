@@ -679,7 +679,7 @@ facts retain workspace or repository scope within it.
 ```sh
 lemmalog observe /work/payments/src/db.rs \
   'payment_service --uses--> postgres' \
-  --ts 100 --provenance 'github://acme/payments/abc123/src/db.rs#L20-L35' \
+  --ts 100 --provenance 'https://github.com/acme/payments/blob/abc123/src/db.rs#L20-L35' \
   --captured-at 2026-08-29T19:42:00Z
 lemmalog query /work/payments 'current("payment_service", "uses", O)'
 lemmalog why /work/payments 'current(payment_service, uses, postgres)'

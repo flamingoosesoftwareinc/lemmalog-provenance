@@ -618,8 +618,8 @@ mod tests {
     #[test]
     fn repository_keys_are_stable() {
         assert_eq!(
-            stable_key("github://acme/payments"),
-            stable_key("github://acme/payments")
+            stable_key("https://github.com/acme/payments"),
+            stable_key("https://github.com/acme/payments")
         );
         assert_ne!(stable_key("a"), stable_key("b"));
     }
