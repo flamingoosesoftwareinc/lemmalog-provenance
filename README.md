@@ -96,7 +96,7 @@ lemmalog skill install                         # ~/.agents/skills
 lemmalog skill install --path ~/.claude/skills # another agent
 ```
 
-Install the `lemmalog` binary first as described under **Run** below.
+Install the `lemmalog` binary first as described under **Install** below.
 
 ## MCP server: use from Claude Code or Kimi CLI
 
@@ -657,6 +657,29 @@ m.why("current(alice, works_at, gigant)")?;          // proof tree -> episodes
   only rebuilt-and-propagated-into if its input's key set actually changed.
   A `works_at` supersession rebuilds `current` (linear) and leaves a
   manager-only closure untouched.
+
+## Install
+
+With a current Rust toolchain and Cargo:
+
+```sh
+cargo install \
+  --git https://github.com/flamingoosesoftwareinc/lemmalog-provenance.git \
+  --bin lemmalog \
+  --locked
+lemmalog help
+```
+
+Optionally install the embedded agent skill. The default is user-global;
+`--path` selects another agent or a repository-local skills directory:
+
+```sh
+lemmalog skill install
+lemmalog skill install --path /workspace/.agents/skills
+```
+
+Cargo installs the executable under `$CARGO_HOME/bin` (normally
+`~/.cargo/bin`), which must be on `PATH`.
 
 ## Run
 
