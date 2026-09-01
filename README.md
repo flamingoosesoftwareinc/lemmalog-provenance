@@ -712,7 +712,7 @@ lemmalog query 'current("payment_service", "uses", O)'
 lemmalog why 'current(payment_service, uses, postgres)'
 # Vocabulary unknown: use a few basic lexical probes, then query exact terms.
 lemmalog search 'timeout' --limit 10
-lemmalog search 'retry|backoff' --limit 10
+lemmalog search 'retry|backoff' --limit 10 --format text
 lemmalog query 'current("payment_client", "retry_policy", O)'
 lemmalog why 'current(payment_client, retry_policy, exponential_backoff)'
 lemmalog observe 'PaymentSettled --means--> completed_payment' \
@@ -727,9 +727,14 @@ workspace by default; `--scope repository` selects the target repository plus
 shared workspace facts and therefore requires a repository context;
 `--scope workspace` selects shared facts only. Search uses
 the same visibility rules, ripgrep-compatible Rust regex syntax, smart case,
-stable lexical output, and a default limit of 50. It streams current `edge` and
-`scoped_edge` facts without loading the reasoning engine. Lowercase patterns
-ignore case; patterns with uppercase letters preserve case.
+stable lexical output, and a default limit of 50. Use `--format text` for
+separated human-readable result cards, `--format json` for structured output,
+or `--format canonical` for the stable tab-delimited form. The default is text
+on a terminal and canonical when stdout is not a terminal. Text results are
+separated cards with Relationship, Scope, and Provenance sections; source URLs
+remain printed in full. It streams current
+`edge` and `scoped_edge` facts without loading the reasoning engine. Lowercase
+patterns ignore case; patterns with uppercase letters preserve case.
 
 When exact domain vocabulary is known, use `query` first. Otherwise, extract a
 small set of concrete nouns, verbs or relationships, quoted errors, and symbol

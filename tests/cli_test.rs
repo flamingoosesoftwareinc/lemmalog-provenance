@@ -617,6 +617,44 @@ fn cli_search_snapshot_preserves_complete_rows_order_and_truncation() {
         "cli_search_representative",
         String::from_utf8(searched.stdout).unwrap().trim_end()
     );
+
+    let text = cli()
+        .env("XDG_DATA_HOME", &data)
+        .args([
+            "search",
+            repo.to_str().unwrap(),
+            "search|candidate|vocabulary",
+            "--limit",
+            "4",
+            "--format",
+            "text",
+        ])
+        .output()
+        .unwrap();
+    assert!(text.status.success());
+    insta::assert_snapshot!(
+        "cli_search_text_representative",
+        String::from_utf8(text.stdout).unwrap().trim_end()
+    );
+
+    let json = cli()
+        .env("XDG_DATA_HOME", &data)
+        .args([
+            "search",
+            repo.to_str().unwrap(),
+            "search|candidate|vocabulary",
+            "--limit",
+            "4",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(json.status.success());
+    insta::assert_snapshot!(
+        "cli_search_json_representative",
+        String::from_utf8(json.stdout).unwrap().trim_end()
+    );
     std::fs::remove_dir_all(root).unwrap();
 }
 

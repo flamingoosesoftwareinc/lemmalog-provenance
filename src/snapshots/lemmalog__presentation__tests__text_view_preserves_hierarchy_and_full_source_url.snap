@@ -1,0 +1,28 @@
+---
+source: src/presentation.rs
+assertion_line: 257
+expression: rendered
+---
+Search results (2)
+════════════════════════════════════════════════════════════════
+Relationship
+  alpha --describes--> Search
+────────────────────────────────────────────────────────────────
+Scope
+  repository · git@github.com:example/service.git
+────────────────────────────────────────────────────────────────
+Provenance
+  internal episode: ep1
+  source: https://github.com/example/service/blob/abc/README.md#L2-L4
+
+════════════════════════════════════════════════════════════════
+Relationship
+  billing --owns--> ledger
+────────────────────────────────────────────────────────────────
+Scope
+  workspace
+────────────────────────────────────────────────────────────────
+Provenance
+  internal episode: ep2
+════════════════════════════════════════════════════════════════
+truncated: limit (2 shown, more matched)

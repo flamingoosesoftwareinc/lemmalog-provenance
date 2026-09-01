@@ -1,0 +1,51 @@
+---
+source: tests/cli_test.rs
+assertion_line: 635
+expression: "String::from_utf8(text.stdout).unwrap().trim_end()"
+---
+Search results (4)
+════════════════════════════════════════════════════════════════
+Relationship
+  alpha_service --describes--> RustSearch
+────────────────────────────────────────────────────────────────
+Scope
+  repository · git@github.com:example/service.git
+────────────────────────────────────────────────────────────────
+Provenance
+  internal episode: ep1
+  source: literal\n\t\,ref,with,commas
+
+════════════════════════════════════════════════════════════════
+Relationship
+  delta_cli --emits--> candidate_row
+────────────────────────────────────────────────────────────────
+Scope
+  repository · git@github.com:example/service.git
+────────────────────────────────────────────────────────────────
+Provenance
+  internal episode: ep1
+  source: literal\n\t\,ref,with,commas
+
+════════════════════════════════════════════════════════════════
+Relationship
+  epsilon_store --contains--> vocabulary_terms
+────────────────────────────────────────────────────────────────
+Scope
+  repository · git@github.com:example/service.git
+────────────────────────────────────────────────────────────────
+Provenance
+  internal episode: ep1
+  source: literal\n\t\,ref,with,commas
+
+════════════════════════════════════════════════════════════════
+Relationship
+  gamma_api --uses--> Searcher
+────────────────────────────────────────────────────────────────
+Scope
+  repository · git@github.com:example/service.git
+────────────────────────────────────────────────────────────────
+Provenance
+  internal episode: ep1
+  source: literal\n\t\,ref,with,commas
+════════════════════════════════════════════════════════════════
+truncated: limit (4 shown, more matched)

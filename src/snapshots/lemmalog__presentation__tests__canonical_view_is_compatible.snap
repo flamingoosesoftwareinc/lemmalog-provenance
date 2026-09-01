@@ -1,0 +1,8 @@
+---
+source: src/presentation.rs
+assertion_line: 269
+expression: rendered
+---
+repository:git@github.com:example/service.git	alpha --describes--> Search	provenance=ep1,https://github.com/example/service/blob/abc/README.md#L2-L4
+workspace	billing --owns--> ledger	provenance=ep2
+truncated: limit (2 shown, more matched)

@@ -1,0 +1,6 @@
+---
+source: src/presentation.rs
+assertion_line: 263
+expression: rendered
+---
+{"results":[{"relationship":"alpha --describes--> Search","scope":"repository:git@github.com:example/service.git","provenance":["internal episode: ep1","source: https://github.com/example/service/blob/abc/README.md#L2-L4"]},{"relationship":"billing --owns--> ledger","scope":"workspace","provenance":["internal episode: ep2"]}],"truncated":true,"limit":2}

@@ -3,9 +3,11 @@
 //! The CLI is deliberately a one-shot boundary: resolve one workspace,
 //! load its snapshot, perform one operation, save mutations, and exit.
 
+use crate::presentation::SearchFormat;
 use crate::{AgentMemory, MockExtractor};
 use std::collections::BTreeMap;
 use std::env;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -28,6 +30,7 @@ Workspace and scope options:
 
 Other search options:
   --limit <positive-integer>       maximum result rows (default: 50)
+  --format <text|canonical|json>   search output format (default: text on TTY, canonical otherwise)
 
 Other observe options:
   --ts <unix-seconds>              fact validity/assertion time (default: now)
@@ -72,7 +75,12 @@ enum Scope {
 }
 
 pub fn run(args: impl IntoIterator<Item = String>) -> i32 {
-    match command(args.into_iter().collect()) {
+    let default_format = if std::io::stdout().is_terminal() {
+        SearchFormat::Text
+    } else {
+        SearchFormat::Canonical
+    };
+    match command(args.into_iter().collect(), default_format) {
         Ok(output) => {
             if !output.is_empty() {
                 println!("{output}");
@@ -87,14 +95,14 @@ pub fn run(args: impl IntoIterator<Item = String>) -> i32 {
     }
 }
 
-fn command(args: Vec<String>) -> Result<String, String> {
+fn command(args: Vec<String>, default_search_format: SearchFormat) -> Result<String, String> {
     let Some(command) = args.first().map(String::as_str) else {
         return Err("missing command".to_string());
     };
     match command {
         "help" | "--help" | "-h" => Ok(USAGE.to_string()),
         "observe" => observe(&args[1..]),
-        "search" => search(&args[1..]),
+        "search" => search(&args[1..], default_search_format),
         "query" => query(&args[1..], false),
         "why" => why(&args[1..]),
         "skill" => skill(&args[1..]),
@@ -102,8 +110,8 @@ fn command(args: Vec<String>) -> Result<String, String> {
     }
 }
 
-fn search(args: &[String]) -> Result<String, String> {
-    let (path, pattern, workspace_override, scope, limit) = parse_search_args(args)?;
+fn search(args: &[String], default_format: SearchFormat) -> Result<String, String> {
+    let (path, pattern, workspace_override, scope, limit, format) = parse_search_args(args)?;
     let context = resolve_context(&path, workspace_override.as_deref())?;
     let repository_scope = match scope {
         Scope::Repository => scope_name(&context, Scope::Repository)?,
@@ -134,14 +142,7 @@ fn search(args: &[String]) -> Result<String, String> {
         include_legacy,
     )
     .map_err(|error| format!("search: {error}"))?;
-    if result.rows.is_empty() {
-        return Ok("(no answers)".to_string());
-    }
-    let mut output = result.rows.join("\n");
-    if result.truncated {
-        output.push_str(&format!("\ntruncated: limit ({limit} shown, more matched)"));
-    }
-    Ok(output)
+    crate::presentation::render_search(&result, format.unwrap_or(default_format), limit)
 }
 
 fn skill(args: &[String]) -> Result<String, String> {
@@ -457,11 +458,22 @@ fn parse_read_args(
 
 fn parse_search_args(
     args: &[String],
-) -> Result<(PathBuf, String, Option<PathBuf>, Scope, usize), String> {
+) -> Result<
+    (
+        PathBuf,
+        String,
+        Option<PathBuf>,
+        Scope,
+        usize,
+        Option<SearchFormat>,
+    ),
+    String,
+> {
     let mut positional = Vec::new();
     let mut workspace = None;
     let mut scope = Scope::All;
     let mut limit = 50usize;
+    let mut format = None;
     let mut options = true;
     let mut index = 0;
     while index < args.len() {
@@ -488,6 +500,12 @@ fn parse_search_args(
                     return Err("--limit requires a positive integer".to_string());
                 }
             }
+            "--format" if options => {
+                index += 1;
+                format = Some(SearchFormat::parse(
+                    args.get(index).ok_or("--format requires a value")?,
+                )?);
+            }
             option if options && option.starts_with('-') => {
                 return Err(format!("unknown search option {option:?}"));
             }
@@ -496,7 +514,7 @@ fn parse_search_args(
         index += 1;
     }
     let (path, pattern) = target_and_expression(positional, "search", "pattern")?;
-    Ok((path, pattern, workspace, scope, limit))
+    Ok((path, pattern, workspace, scope, limit, format))
 }
 
 fn target_and_expression(

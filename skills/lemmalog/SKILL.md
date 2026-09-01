@@ -39,7 +39,7 @@ The skill is embedded in the binary. `skill install` writes or updates `~/.agent
 
    ```sh
    lemmalog search 'timeout' --limit 10
-   lemmalog search 'retry|backoff' --limit 10
+   lemmalog search 'retry|backoff' --limit 10 --format text
    lemmalog search 'ClientError' --limit 10
    ```
 
@@ -49,7 +49,7 @@ The skill is embedded in the binary. `skill install` writes or updates `~/.agent
    lemmalog search '.*' --limit 50
    ```
 
-   Search streams current stored base facts. It is not a workspace scan. Lowercase patterns ignore case; uppercase patterns preserve case. The default limit is 50. An empty search or query result means continue with normal code tools, not bootstrap a repository scan.
+   Search streams current stored base facts. It is not a workspace scan. Lowercase patterns ignore case; uppercase patterns preserve case. The default limit is 50. Use `--format text` for separated relationship/scope/provenance cards, `--format json` for structured agent output, or `--format canonical` for the stable tab-delimited form. The default is text on a terminal and canonical when stdout is not a terminal. Text results separate Relationship, Scope, and Provenance into readable cards and print full source URLs. An empty search or query result means continue with normal code tools, not bootstrap a repository scan.
 
 2. Confirm claims with source, Git, LSP, or another primary tool. Lemmalog memory is evidence to inspect, not authority.
 3. Record concise, reusable relationships after confirmation:

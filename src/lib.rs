@@ -40,6 +40,7 @@ pub mod retrieval;
 pub mod scenario;
 pub mod semantics;
 pub mod session;
+mod presentation;
 mod search;
 mod snapshot;
 

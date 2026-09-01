@@ -1,0 +1,6 @@
+---
+source: tests/cli_test.rs
+assertion_line: 654
+expression: "String::from_utf8(json.stdout).unwrap().trim_end()"
+---
+{"results":[{"relationship":"alpha_service --describes--> RustSearch","scope":"repository:git@github.com:example/service.git","provenance":["internal episode: ep1","source: literal\\n\\t\\,ref,with,commas"]},{"relationship":"delta_cli --emits--> candidate_row","scope":"repository:git@github.com:example/service.git","provenance":["internal episode: ep1","source: literal\\n\\t\\,ref,with,commas"]},{"relationship":"epsilon_store --contains--> vocabulary_terms","scope":"repository:git@github.com:example/service.git","provenance":["internal episode: ep1","source: literal\\n\\t\\,ref,with,commas"]},{"relationship":"gamma_api --uses--> Searcher","scope":"repository:git@github.com:example/service.git","provenance":["internal episode: ep1","source: literal\\n\\t\\,ref,with,commas"]}],"truncated":true,"limit":4}
