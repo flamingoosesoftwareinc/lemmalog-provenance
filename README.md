@@ -685,10 +685,12 @@ Cargo installs the executable under `$CARGO_HOME/bin` (normally
 
 ### Workspace CLI
 
-The `lemmalog` binary is also a one-shot, workspace-aware CLI. Pass a file or
-directory inside any Git checkout. Without configuration, its Git root is an
+The `lemmalog` binary is also a one-shot, workspace-aware CLI. Commands default
+to the current directory, so no path is required while working inside a
+configured workspace. Without configuration, the current Git root is an
 isolated workspace, preserving repository-scoped behavior. For a workspace of
-multiple repositories, add this marker at their common ancestor:
+multiple repositories, add this marker at their common ancestor; that ancestor
+does not need to be a Git repository:
 
 ```toml
 # .lemmalog
@@ -697,30 +699,33 @@ id = "company-platform"
 
 Resolution uses `--workspace <path>`, the nearest ancestor `.lemmalog`, or the
 Git root fallback, in that order. Marked workspaces use one durable snapshot;
-facts retain workspace or repository scope within it.
+facts retain workspace or repository scope within it. An explicit positional
+path remains available when addressing another location.
 
 ```sh
-lemmalog observe /work/payments/src/db.rs \
+lemmalog observe \
   'payment_service --uses--> postgres' \
   --ts 100 --provenance 'https://github.com/acme/payments/blob/abc123/src/db.rs#L20-L35' \
   --captured-at 2026-08-29T19:42:00Z
 # Exact vocabulary known: query first.
-lemmalog query /work/payments 'current("payment_service", "uses", O)'
-lemmalog why /work/payments 'current(payment_service, uses, postgres)'
+lemmalog query 'current("payment_service", "uses", O)'
+lemmalog why 'current(payment_service, uses, postgres)'
 # Vocabulary unknown: use a few basic lexical probes, then query exact terms.
-lemmalog search /work/payments 'timeout' --limit 10
-lemmalog search /work/payments 'retry|backoff' --limit 10
-lemmalog query /work/payments 'current("payment_client", "retry_policy", O)'
-lemmalog why /work/payments 'current(payment_client, retry_policy, exponential_backoff)'
-lemmalog observe /work/payments 'PaymentSettled --means--> completed_payment' \
+lemmalog search 'timeout' --limit 10
+lemmalog search 'retry|backoff' --limit 10
+lemmalog query 'current("payment_client", "retry_policy", O)'
+lemmalog why 'current(payment_client, retry_policy, exponential_backoff)'
+lemmalog observe 'PaymentSettled --means--> completed_payment' \
   --scope workspace --provenance 'git://payments/abc123/events.go#L10-L18'
-lemmalog query /work/payments \
+lemmalog query \
   'flow(S) :- current("payments", "emits", E), current(E, "handled_by", S)'
 ```
 
-Observations default to repository scope. Queries see the resolved workspace by
-default; `--scope repository` selects the target repository plus shared
-workspace facts, and `--scope workspace` selects shared facts only. Search uses
+Observations default to repository scope inside a member Git repository and to
+workspace scope elsewhere in a marked workspace. Queries see the resolved
+workspace by default; `--scope repository` selects the target repository plus
+shared workspace facts and therefore requires a repository context;
+`--scope workspace` selects shared facts only. Search uses
 the same visibility rules, ripgrep-compatible Rust regex syntax, smart case,
 stable lexical output, and a default limit of 50. It streams current `edge` and
 `scoped_edge` facts without loading the reasoning engine. Lowercase patterns
@@ -732,7 +737,7 @@ fragments from the question. Run simple `search` probes one at a time with
 conservative limits; do not submit the full natural-language question as one
 regex. Expand only from returned subjects, predicates, or objects, and stop as
 soon as an exact query can be formed. If no useful initial probe exists, use one
-bounded vocabulary browse: `lemmalog search <path> '.*' --limit 50`. Then query
+bounded vocabulary browse: `lemmalog search '.*' --limit 50`. Then query
 exact facts or rules and use `why` before trusting or citing a claim. This is
 bounded discovery, not an autonomous workspace scan.
 

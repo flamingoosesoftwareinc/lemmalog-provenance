@@ -438,6 +438,123 @@ fn explicit_workspace_override_and_nearest_marker_are_deterministic() {
 }
 
 #[test]
+fn configured_non_git_workspace_defaults_commands_to_current_directory() {
+    // Kill claim: requiring a positional path or resolving Git before the
+    // workspace marker makes every command fail from this non-Git root.
+    let root = temp_root("cwd-workspace");
+    let workspace = root.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(workspace.join(".lemmalog"), "id = \"cwd-workspace\"\n").unwrap();
+    let data = root.join("data");
+
+    let observed = cli()
+        .current_dir(&workspace)
+        .env("XDG_DATA_HOME", &data)
+        .args([
+            "observe",
+            "workspace_service --uses--> shared_cache",
+            "--ts",
+            "100",
+        ])
+        .output()
+        .unwrap();
+    assert!(observed.status.success());
+    assert_eq!(
+        String::from_utf8(observed.stdout).unwrap().lines().nth(4),
+        Some("scope=workspace")
+    );
+
+    let queried = cli()
+        .current_dir(&workspace)
+        .env("XDG_DATA_HOME", &data)
+        .args(["query", "current(\"workspace_service\", \"uses\", O)"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(queried.stdout).unwrap().trim(),
+        "O=shared_cache"
+    );
+
+    let searched = cli()
+        .current_dir(&workspace)
+        .env("XDG_DATA_HOME", &data)
+        .args(["search", "cache", "--limit", "5"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(searched.stdout).unwrap().trim(),
+        "workspace\tworkspace_service --uses--> shared_cache\tprovenance=ep1"
+    );
+
+    let explained = cli()
+        .current_dir(&workspace)
+        .env("XDG_DATA_HOME", &data)
+        .args(["why", "current(workspace_service, uses, shared_cache)"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(explained.stdout).unwrap().trim(),
+        "current(workspace_service, uses, shared_cache)  (conf 0.900, prov [\"ep1\"])\n  ↳ via rule/current\n    scoped_edge(workspace, workspace_service, uses, shared_cache, 100, 9223372036854775807, 100)  (conf 0.900, prov [\"ep1\"])\n      ↳ asserted (base fact)"
+    );
+
+    let member = repository(
+        &workspace.join("member"),
+        "git@github.com:example/member.git",
+    );
+    let member_observed = cli()
+        .current_dir(&member)
+        .env("XDG_DATA_HOME", &data)
+        .args([
+            "observe",
+            "member_service --uses--> member_cache",
+            "--ts",
+            "100",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(member_observed.stdout)
+            .unwrap()
+            .lines()
+            .nth(4),
+        Some("scope=repository:git@github.com:example/member.git")
+    );
+
+    let member_visible = cli()
+        .current_dir(&workspace)
+        .env("XDG_DATA_HOME", &data)
+        .args(["query", "current(\"member_service\", \"uses\", O)"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(member_visible.stdout).unwrap().trim(),
+        "O=member_cache"
+    );
+
+    let repository_only = cli()
+        .current_dir(&workspace)
+        .env("XDG_DATA_HOME", &data)
+        .args([
+            "query",
+            "current(\"workspace_service\", \"uses\", O)",
+            "--scope",
+            "repository",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(repository_only.status.code(), Some(2));
+    assert_eq!(
+        String::from_utf8(repository_only.stderr)
+            .unwrap()
+            .lines()
+            .next(),
+        Some("lemmalog: repository scope requires a path inside a Git repository")
+    );
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn cli_search_snapshot_preserves_complete_rows_order_and_truncation() {
     // Kill claim: dropped/reordered row fields, annotations, lexical rank,
     // scope labels, or truncation changes the complete snapshot.

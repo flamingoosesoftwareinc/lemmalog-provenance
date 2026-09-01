@@ -14,15 +14,15 @@ const EMBEDDED_SKILL: &str = include_str!("../skills/lemmalog/SKILL.md");
 
 const USAGE: &str = "Usage:
   lemmalog                         start the interactive REPL
-  lemmalog observe <path> <facts> [options]
-  lemmalog search <path> <pattern> [options]
-  lemmalog query <path> <goal> [options]
-  lemmalog why <path> <fact> [options]
+  lemmalog observe [<path>] <facts> [options]
+  lemmalog search [<path>] <pattern> [options]
+  lemmalog query [<path>] <goal> [options]
+  lemmalog why [<path>] <fact> [options]
   lemmalog skill install [--path <skills-directory>]
 
 Workspace and scope options:
   --workspace <path>               override .lemmalog workspace discovery
-  --scope <repository|workspace>   observation scope (default: repository)
+  --scope <repository|workspace>   observation scope (default: current context)
   --scope <all|repository|workspace>
                                    search/query/why visibility (default: all)
 
@@ -34,12 +34,13 @@ Other observe options:
   --provenance <uri>               opaque evidence URI (repeatable)
   --captured-at <timestamp>        evidence capture time (default: now, RFC3339)
 
-The target path may name any file or directory inside a Git repository.
-Lemmalog uses an explicit workspace override, the nearest ancestor .lemmalog
-marker, or the Git root fallback, in that order. Stores remain outside the
-workspace under the user data directory. A marker contains id = \"stable-id\";
-an override names that marker or its directory. A query goal may be one atom
-or a temporary Datalog rule whose head is returned.
+The target path defaults to the current directory. Lemmalog uses an explicit
+workspace override, the nearest ancestor .lemmalog marker, or the Git root
+fallback, in that order. A marked workspace root need not be a Git repository;
+Git repositories inside it provide optional repository scopes. Stores remain
+outside the workspace under the user data directory. A marker contains
+id = \"stable-id\"; an override names that marker or its directory. A query goal
+may be one atom or a temporary Datalog rule whose head is returned.
 ";
 
 #[derive(Debug)]
@@ -59,7 +60,7 @@ struct Workspace {
 
 #[derive(Debug)]
 struct Context {
-    repository: Repository,
+    repository: Option<Repository>,
     workspace: Workspace,
 }
 
@@ -104,7 +105,14 @@ fn command(args: Vec<String>) -> Result<String, String> {
 fn search(args: &[String]) -> Result<String, String> {
     let (path, pattern, workspace_override, scope, limit) = parse_search_args(args)?;
     let context = resolve_context(&path, workspace_override.as_deref())?;
-    let repository_scope = scope_name(&context, Scope::Repository);
+    let repository_scope = match scope {
+        Scope::Repository => scope_name(&context, Scope::Repository)?,
+        Scope::All | Scope::Workspace => context
+            .repository
+            .as_ref()
+            .map(|repository| format!("repository:{}", repository.identity))
+            .unwrap_or_else(|| "workspace".to_string()),
+    };
     let (selected_scopes, include_legacy) = match scope {
         Scope::All => (None, true),
         Scope::Workspace => (Some(["workspace".to_string()].into_iter().collect()), false),
@@ -176,7 +184,7 @@ fn observe(args: &[String]) -> Result<String, String> {
     let mut uris = Vec::new();
     let mut captured_at = None;
     let mut workspace_override = None;
-    let mut scope = Scope::Repository;
+    let mut scope = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -188,7 +196,10 @@ fn observe(args: &[String]) -> Result<String, String> {
             }
             "--scope" => {
                 i += 1;
-                scope = parse_scope(args.get(i).ok_or("--scope requires a value")?, false)?;
+                scope = Some(parse_scope(
+                    args.get(i).ok_or("--scope requires a value")?,
+                    false,
+                )?);
             }
             "--ts" => {
                 i += 1;
@@ -221,20 +232,23 @@ fn observe(args: &[String]) -> Result<String, String> {
         }
         i += 1;
     }
-    if positional.len() != 2 {
-        return Err("observe requires <path> and one quoted facts argument".to_string());
-    }
+    let (path, facts) = target_and_expression(positional, "observe", "facts")?;
     if captured_at.is_some() && uris.is_empty() {
         return Err("--captured-at requires at least one --provenance URI".to_string());
     }
 
-    let context = resolve_context(Path::new(&positional[0]), workspace_override.as_deref())?;
-    let mut memory = load_memory(&context.workspace)?;
-    let scope_name = scope_name(&context, scope);
-    let (report, dropped) = if context.workspace.marked || scope == Scope::Workspace {
-        memory.observe_scoped_extracted_with_provenance(&positional[1], ts, &scope_name, &uris)
+    let context = resolve_context(&path, workspace_override.as_deref())?;
+    let scope = scope.unwrap_or(if context.repository.is_some() {
+        Scope::Repository
     } else {
-        memory.observe_extracted_with_provenance(&positional[1], ts, &uris)
+        Scope::Workspace
+    });
+    let mut memory = load_memory(&context.workspace)?;
+    let scope_name = scope_name(&context, scope)?;
+    let (report, dropped) = if context.workspace.marked || scope == Scope::Workspace {
+        memory.observe_scoped_extracted_with_provenance(&facts, ts, &scope_name, &uris)
+    } else {
+        memory.observe_extracted_with_provenance(&facts, ts, &uris)
     };
     memory.maintain(ts);
     if let Some(parent) = context.workspace.snapshot.parent() {
@@ -262,8 +276,17 @@ fn observe(args: &[String]) -> Result<String, String> {
         "workspace={}\nworkspace_root={}\nrepository={}\nroot={}\nscope={}\nadded={} updated={} noop={} escalations={}\nsnapshot={}",
         context.workspace.identity,
         context.workspace.root.display(),
-        context.repository.identity,
-        context.repository.root.display(),
+        context
+            .repository
+            .as_ref()
+            .map(|repository| repository.identity.as_str())
+            .unwrap_or("(none)"),
+        context
+            .repository
+            .as_ref()
+            .map(|repository| repository.root.as_path())
+            .unwrap_or(context.workspace.root.as_path())
+            .display(),
         scope_name,
         report.added,
         report.updated,
@@ -284,7 +307,7 @@ fn query(args: &[String], deep: bool) -> Result<String, String> {
     let (path, goal, workspace_override, scope) = parse_read_args(args, "query")?;
     let context = resolve_context(&path, workspace_override.as_deref())?;
     let mut memory = load_memory(&context.workspace)?;
-    restrict_scope(&mut memory, &context, scope);
+    restrict_scope(&mut memory, &context, scope)?;
     let rows = if deep {
         memory.ask_deep(&goal).map_err(|e| format!("query: {e}"))?
     } else {
@@ -301,7 +324,7 @@ fn why(args: &[String]) -> Result<String, String> {
     let (path, fact, workspace_override, scope) = parse_read_args(args, "why")?;
     let context = resolve_context(&path, workspace_override.as_deref())?;
     let mut memory = load_memory(&context.workspace)?;
-    restrict_scope(&mut memory, &context, scope);
+    restrict_scope(&mut memory, &context, scope)?;
     let proof = memory.why(&fact);
     let evidence = read_evidence(&context.workspace.evidence)?;
     let mut output = proof;
@@ -324,35 +347,44 @@ fn resolve_context(path: &Path, workspace_override: Option<&Path>) -> Result<Con
             .ok_or_else(|| format!("path {} has no parent", path.display()))?
             .to_path_buf()
     };
-    let root = git(&git_dir, &["rev-parse", "--show-toplevel"])?;
-    let root = PathBuf::from(root.trim());
-    let identity = git(&root, &["remote", "get-url", "origin"])
-        .ok()
-        .map(|remote| remote.trim().to_string())
-        .filter(|remote| !remote.is_empty())
-        .unwrap_or_else(|| root.display().to_string());
-    let repository = Repository { root, identity };
     let marker = match workspace_override {
         Some(path) => Some(explicit_marker(path)?),
         None => find_marker(&path),
     };
+    let repository = match git(&git_dir, &["rev-parse", "--show-toplevel"]) {
+        Ok(root) => {
+            let root = PathBuf::from(root.trim());
+            let identity = git(&root, &["remote", "get-url", "origin"])
+                .ok()
+                .map(|remote| remote.trim().to_string())
+                .filter(|remote| !remote.is_empty())
+                .unwrap_or_else(|| root.display().to_string());
+            Some(Repository { root, identity })
+        }
+        Err(_) if marker.is_some() => None,
+        Err(error) => return Err(error),
+    };
     let data_root = data_root()?;
     let workspace = if let Some(marker) = marker {
+        let root = marker
+            .parent()
+            .ok_or_else(|| format!("workspace marker {} has no parent", marker.display()))?
+            .to_path_buf();
         let id = read_workspace_id(&marker)?;
         let identity = format!("workspace:{id}");
         let key = stable_key(&identity);
         let directory = data_root.join("lemmalog").join("workspaces");
         Workspace {
-            root: marker
-                .parent()
-                .expect("workspace marker has parent")
-                .to_path_buf(),
+            root,
             identity,
             marked: true,
             snapshot: directory.join(format!("{key}.snapshot")),
             evidence: directory.join(format!("{key}.evidence")),
         }
     } else {
+        let repository = repository
+            .as_ref()
+            .ok_or_else(|| "unmarked workspace requires a Git repository".to_string())?;
         let key = stable_key(&repository.identity);
         let directory = data_root.join("lemmalog").join("repositories");
         Workspace {
@@ -418,18 +450,9 @@ fn parse_read_args(
         }
         index += 1;
     }
-    if positional.len() != 2 {
-        return Err(format!(
-            "{command} requires <path> and one quoted {} argument",
-            if command == "why" { "fact" } else { "goal" }
-        ));
-    }
-    Ok((
-        PathBuf::from(&positional[0]),
-        positional.remove(1),
-        workspace,
-        scope,
-    ))
+    let label = if command == "why" { "fact" } else { "goal" };
+    let (path, expression) = target_and_expression(positional, command, label)?;
+    Ok((path, expression, workspace, scope))
 }
 
 fn parse_search_args(
@@ -472,27 +495,45 @@ fn parse_search_args(
         }
         index += 1;
     }
-    if positional.len() != 2 {
-        return Err("search requires <path> and one quoted pattern argument".to_string());
-    }
-    Ok((
-        PathBuf::from(&positional[0]),
-        positional.remove(1),
-        workspace,
-        scope,
-        limit,
-    ))
+    let (path, pattern) = target_and_expression(positional, "search", "pattern")?;
+    Ok((path, pattern, workspace, scope, limit))
 }
 
-fn scope_name(context: &Context, scope: Scope) -> String {
+fn target_and_expression(
+    mut positional: Vec<String>,
+    command: &str,
+    label: &str,
+) -> Result<(PathBuf, String), String> {
+    match positional.len() {
+        1 => Ok((
+            env::current_dir()
+                .map_err(|error| format!("cannot resolve current directory: {error}"))?,
+            positional.remove(0),
+        )),
+        2 => Ok((PathBuf::from(positional.remove(0)), positional.remove(0))),
+        _ => Err(format!(
+            "{command} requires one quoted {label} argument and an optional path"
+        )),
+    }
+}
+
+fn scope_name(context: &Context, scope: Scope) -> Result<String, String> {
     match scope {
-        Scope::Workspace => "workspace".to_string(),
-        Scope::Repository => format!("repository:{}", context.repository.identity),
+        Scope::Workspace => Ok("workspace".to_string()),
+        Scope::Repository => context
+            .repository
+            .as_ref()
+            .map(|repository| format!("repository:{}", repository.identity))
+            .ok_or_else(|| "repository scope requires a path inside a Git repository".to_string()),
         Scope::All => unreachable!("all is not an observation scope"),
     }
 }
 
-fn restrict_scope(memory: &mut AgentMemory<MockExtractor>, context: &Context, scope: Scope) {
+fn restrict_scope(
+    memory: &mut AgentMemory<MockExtractor>,
+    context: &Context,
+    scope: Scope,
+) -> Result<(), String> {
     match scope {
         Scope::All => {}
         Scope::Workspace => {
@@ -502,13 +543,14 @@ fn restrict_scope(memory: &mut AgentMemory<MockExtractor>, context: &Context, sc
         Scope::Repository => {
             memory.retain_scopes(&[
                 "workspace".to_string(),
-                scope_name(context, Scope::Repository),
+                scope_name(context, Scope::Repository)?,
             ]);
             if context.workspace.marked {
                 memory.remove_unscoped_facts();
             }
         }
     }
+    Ok(())
 }
 
 fn ask_expression(

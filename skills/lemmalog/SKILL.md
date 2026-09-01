@@ -5,7 +5,7 @@ description: Store and retrieve workspace-scoped code facts with repository boun
 
 # Lemmalog
 
-Use Lemmalog as durable memory for code evidence. For every question about code, consult the resolved workspace store, then investigate with the normal code tools. Populate the store lazily as facts are verified; never scan the whole workspace only to initialize it. Lemmalog resolves `--workspace`, the nearest ancestor `.lemmalog` marker, or the target Git root fallback, in that order. A `.lemmalog` file contains `id = "stable-workspace-id"`. Stores live under `$XDG_DATA_HOME/lemmalog` (normally `~/.local/share/lemmalog`), not in the workspace.
+Use Lemmalog as durable memory for code evidence. For every question about code, consult the resolved workspace store, then investigate with the normal code tools. Populate the store lazily as facts are verified; never scan the whole workspace only to initialize it. Commands default to the current directory. Lemmalog resolves `--workspace`, the nearest ancestor `.lemmalog` marker, or the target Git root fallback, in that order. A marked workspace root need not be a Git repository; repositories below it provide optional repository scopes. A `.lemmalog` file contains `id = "stable-workspace-id"`. Stores live under `$XDG_DATA_HOME/lemmalog` (normally `~/.local/share/lemmalog`), not in the workspace.
 
 ## Install
 
@@ -32,21 +32,21 @@ The skill is embedded in the binary. `skill install` writes or updates `~/.agent
    - Exact domain vocabulary known → query first:
 
    ```sh
-   lemmalog query <repo-path> 'current("subject", "predicate", O)'
+   lemmalog query 'current("subject", "predicate", O)'
    ```
 
    - Vocabulary unknown → extract a small bounded set of concrete nouns, verbs or relationships, quoted errors, and symbol fragments from the question. Run basic lexical probes one at a time with conservative limits. Do not use the full natural-language question as one regex:
 
    ```sh
-   lemmalog search <repo-path> 'timeout' --limit 10
-   lemmalog search <repo-path> 'retry|backoff' --limit 10
-   lemmalog search <repo-path> 'ClientError' --limit 10
+   lemmalog search 'timeout' --limit 10
+   lemmalog search 'retry|backoff' --limit 10
+   lemmalog search 'ClientError' --limit 10
    ```
 
    Expand probes only from subjects, predicates, or objects returned by the prior probe. Stop when enough terms exist for an exact `query`. If no useful probe can be formed, browse only the bounded stored vocabulary:
 
    ```sh
-   lemmalog search <repo-path> '.*' --limit 50
+   lemmalog search '.*' --limit 50
    ```
 
    Search streams current stored base facts. It is not a workspace scan. Lowercase patterns ignore case; uppercase patterns preserve case. The default limit is 50. An empty search or query result means continue with normal code tools, not bootstrap a repository scan.
@@ -55,7 +55,7 @@ The skill is embedded in the binary. `skill install` writes or updates `~/.agent
 3. Record concise, reusable relationships after confirmation:
 
    ```sh
-   lemmalog observe <file-or-repo-path> 'subject --predicate--> object' \
+   lemmalog observe 'subject --predicate--> object' \
      --provenance 'https://github.com/owner/repo/blob/commit/path#L20-L35'
    ```
 
@@ -67,13 +67,13 @@ The skill is embedded in the binary. `skill install` writes or updates `~/.agent
    - Local source: use `file:///absolute/path` when opening the file is sufficient, or a verified editor deep link such as `vscode://file/<absolute-path>:20:1` when exact navigation is required.
 
    For another host or editor, use its **Copy permalink** action or official URL contract; do not invent a template. Never cite a mutable branch URL as permanent evidence. `--provenance` remains opaque: Lemmalog stores and propagates it without interpreting or validating its scheme. Repeat the argument for multiple sources. Avoid tabs and newlines because the evidence sidecar is line-oriented.
-   Observations default to the containing repository. Use `--scope workspace` only for a fact that applies across the workspace. Queries see all workspace repositories by default; use `--scope repository` for the target repository plus shared facts, or `--scope workspace` for shared facts only.
+   Observations default to the target repository when the target is inside one; the target is the current directory when path is omitted. From a marked non-Git workspace root they default to workspace scope. Use `--scope workspace` only for a fact that applies across the workspace. Queries see all workspace repositories by default; use `--scope repository` for the target repository plus shared facts, or `--scope workspace` for shared facts only. Pass an explicit path only to address another location.
    For an end-to-end join, query with one temporary Datalog rule, for example: `lemmalog query . 'flow(S) :- current("payments", "emits", E), current(E, "handled_by", S)'`.
 4. Use discovered vocabulary in an exact query, then inspect the derivation before presenting, trusting, or citing the claim:
 
    ```sh
-   lemmalog query <repo-path> 'current("payment_client", "retry_policy", O)'
-   lemmalog why <repo-path> 'current(subject, predicate, object)'
+   lemmalog query 'current("payment_client", "retry_policy", O)'
+   lemmalog why 'current(subject, predicate, object)'
    ```
 
    Validate the cited source when it is available. Present the relevant provenance URI with every user-facing claim taken from Lemmalog; do not present stored or derived facts as uncited knowledge.
