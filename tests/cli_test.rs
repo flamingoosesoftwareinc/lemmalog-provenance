@@ -505,8 +505,8 @@ fn cli_search_snapshot_preserves_complete_rows_order_and_truncation() {
 
 #[test]
 fn cli_search_honors_smart_case_regex_no_answer_and_limits() {
-    // Kill claim: smart-case, regex compilation, empty behavior, or either
-    // result cap changes an exact boundary assertion.
+    // Kill claim: smart-case, regex compilation, end-of-options handling,
+    // empty behavior, or either result cap changes an exact boundary assertion.
     let root = temp_root("search-matching");
     let repo = repository(&root, "git@github.com:example/matching.git");
     let data = root.join("data");
@@ -522,10 +522,13 @@ fn cli_search_honors_smart_case_regex_no_answer_and_limits() {
         "(no answers)"
     );
 
-    let facts = (0..51)
-        .map(|index| format!("item{index:02} --describes--> RustSearch"))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let facts = format!(
+        "{}\nclient --uses--> RustSearch",
+        (0..51)
+            .map(|index| format!("item{index:02} --describes--> RustSearch"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
     let observed = cli()
         .env("XDG_DATA_HOME", &data)
         .args([
@@ -538,6 +541,17 @@ fn cli_search_honors_smart_case_regex_no_answer_and_limits() {
         .output()
         .unwrap();
     assert!(observed.status.success());
+
+    let leading_dash_pattern = cli()
+        .env("XDG_DATA_HOME", &data)
+        .args(["search", repo.to_str().unwrap(), "--", "--uses-->"])
+        .output()
+        .unwrap();
+    assert!(leading_dash_pattern.status.success());
+    assert_eq!(
+        String::from_utf8(leading_dash_pattern.stdout).unwrap().trim(),
+        "repository:git@github.com:example/matching.git\tclient --uses--> RustSearch\tprovenance=ep1"
+    );
 
     let lowercase = cli()
         .env("XDG_DATA_HOME", &data)

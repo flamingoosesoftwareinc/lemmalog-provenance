@@ -439,20 +439,22 @@ fn parse_search_args(
     let mut workspace = None;
     let mut scope = Scope::All;
     let mut limit = 50usize;
+    let mut options = true;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
-            "--workspace" => {
+            "--" if options => options = false,
+            "--workspace" if options => {
                 index += 1;
                 workspace = Some(PathBuf::from(
                     args.get(index).ok_or("--workspace requires a path")?,
                 ));
             }
-            "--scope" => {
+            "--scope" if options => {
                 index += 1;
                 scope = parse_scope(args.get(index).ok_or("--scope requires a value")?, true)?;
             }
-            "--limit" => {
+            "--limit" if options => {
                 index += 1;
                 limit = args
                     .get(index)
@@ -463,7 +465,7 @@ fn parse_search_args(
                     return Err("--limit requires a positive integer".to_string());
                 }
             }
-            option if option.starts_with('-') => {
+            option if options && option.starts_with('-') => {
                 return Err(format!("unknown search option {option:?}"));
             }
             _ => positional.push(args[index].clone()),

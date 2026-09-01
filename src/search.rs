@@ -58,6 +58,18 @@ impl From<SnapshotError> for SearchError {
 
 impl From<io::Error> for SearchError {
     fn from(error: io::Error) -> Self {
+        if error
+            .get_ref()
+            .is_some_and(|source| source.is::<SnapshotError>())
+        {
+            let source = error
+                .into_inner()
+                .expect("snapshot error source was present");
+            let snapshot = source
+                .downcast::<SnapshotError>()
+                .expect("snapshot error source type was checked");
+            return SearchError::Snapshot(*snapshot);
+        }
         SearchError::Io(error)
     }
 }
@@ -85,9 +97,7 @@ pub(crate) fn search_snapshot(
     let records = SnapshotReader::new(BufReader::new(file))?;
     let mut facts = FactRowReader::new(records, selected_scopes, legacy_scope, include_legacy)?;
     let mut matches = BoundedMatches::new(limit.saturating_add(1));
-    Searcher::new()
-        .search_reader(&matcher, &mut facts, &mut matches)
-        .map_err(SearchError::Io)?;
+    Searcher::new().search_reader(&matcher, &mut facts, &mut matches)?;
 
     let peak_snapshot_record_bytes = facts.peak_snapshot_record_bytes();
     let mut rows = matches.rows.into_vec();
@@ -435,11 +445,9 @@ mod tests {
 
         let max_snapshot_line = std::io::BufReader::new(std::fs::File::open(&path)?)
             .lines()
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .map(|line| line.len() + 1)
-            .max()
-            .ok_or("empty snapshot")?;
+            .try_fold(0usize, |peak, line| {
+                line.map(|line| peak.max(line.len() + 1))
+            })?;
         let max_row = oversized.len() + 128;
         assert!(
             first.stats.peak_snapshot_record_bytes <= max_snapshot_line * 2 + 1_024,
@@ -523,10 +531,9 @@ mod tests {
     }
 
     #[test]
-    fn load_and_search_share_version_and_malformed_record_behavior(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn load_and_search_share_snapshot_version_behavior() -> Result<(), Box<dyn std::error::Error>> {
         // Kill claim: adding a second decoder makes load/search disagree on a
-        // compatibility magic, escaped symbol, or malformed FACT argument.
+        // compatibility magic or escaped symbol.
         let snapshots = [
             ("CORTEXLOG1", "ep1"),
             ("LEMMALOG1", "ep1"),
@@ -561,15 +568,19 @@ mod tests {
             std::fs::remove_file(path)?;
         }
 
-        let malformed = snapshot_path("malformed-shared")?;
+        Ok(())
+    }
+
+    #[test]
+    fn mid_stream_corruption_remains_a_snapshot_error() -> Result<(), Box<dyn std::error::Error>> {
+        // Kill claim: converting decoder failures to generic reader I/O loses
+        // the snapshot error category and its exact corruption location.
+        let malformed = snapshot_path("malformed-mid-stream")?;
         std::fs::write(
             &malformed,
-            "LEMMALOG2\nNOW\t10\nRULES\t\nFACT\tedge\t0.9\t3:ep1\tx:bad\n",
+            "LEMMALOG2\nNOW\t10\nRULES\t\nFACT\tedge\t0.9\t3:ep1\ts:a s:matches s:needle i:0 i:20 i:0\nFACT\tedge\t0.9\t3:ep1\tx:bad\n",
         )?;
-        assert!(
-            AgentMemory::load(MockExtractor::new(0.9), &malformed.display().to_string()).is_err()
-        );
-        assert!(search_snapshot(
+        let search_error = search_snapshot(
             &malformed,
             ".",
             10,
@@ -577,7 +588,18 @@ mod tests {
             "repository:test".to_string(),
             true,
         )
-        .is_err());
+        .expect_err("malformed snapshot must fail search");
+        assert_eq!(
+            search_error.to_string(),
+            "malformed snapshot record at line 5: invalid FACT argument \"x:bad\""
+        );
+        match search_error {
+            SearchError::Snapshot(SnapshotError::Malformed { line, message }) => {
+                assert_eq!(line, 5);
+                assert_eq!(message, "invalid FACT argument \"x:bad\"");
+            }
+            other => panic!("expected malformed snapshot error, got {other:?}"),
+        }
         std::fs::remove_file(malformed)?;
         Ok(())
     }

@@ -746,9 +746,7 @@ the workspace.
 
 ```sh
 cargo run --bin lemmalog          # interactive REPL (or pipe a script)
-cargo test                         # 44 tests: engine (20) + agg (6) + agent (10) +
-                                   # differential (3) + semantics (2) +
-                                   # eval (2) + session (1)
+cargo test                         # run the complete test suite
 cargo run --example agent_memory   # engine-level demo
 cargo run --example agent_session  # full agent loop incl. ask_deep + news
 cargo run --release --example investigation # the thesis in one run: derived
