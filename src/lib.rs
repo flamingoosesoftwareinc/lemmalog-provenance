@@ -40,6 +40,8 @@ pub mod retrieval;
 pub mod scenario;
 pub mod semantics;
 pub mod session;
+mod search;
+mod snapshot;
 
 pub use agent::{
     assemble_context, AgentMemory, Episode, Extractor, IngestReport, LlmExtractor, MockExtractor,

@@ -1,0 +1,9 @@
+---
+source: tests/cli_test.rs
+expression: "String::from_utf8(searched.stdout).unwrap().trim_end()"
+---
+repository:git@github.com:example/service.git	alpha_service --describes--> RustSearch	provenance=ep1,literal\n\t\,ref,with,commas
+repository:git@github.com:example/service.git	delta_cli --emits--> candidate_row	provenance=ep1,literal\n\t\,ref,with,commas
+repository:git@github.com:example/service.git	epsilon_store --contains--> vocabulary_terms	provenance=ep1,literal\n\t\,ref,with,commas
+repository:git@github.com:example/service.git	gamma_api --uses--> Searcher	provenance=ep1,literal\n\t\,ref,with,commas
+truncated: limit (4 shown, more matched)

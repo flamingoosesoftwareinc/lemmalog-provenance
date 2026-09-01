@@ -15,6 +15,7 @@ const EMBEDDED_SKILL: &str = include_str!("../skills/lemmalog/SKILL.md");
 const USAGE: &str = "Usage:
   lemmalog                         start the interactive REPL
   lemmalog observe <path> <facts> [options]
+  lemmalog search <path> <pattern> [options]
   lemmalog query <path> <goal> [options]
   lemmalog why <path> <fact> [options]
   lemmalog skill install [--path <skills-directory>]
@@ -23,7 +24,10 @@ Workspace and scope options:
   --workspace <path>               override .lemmalog workspace discovery
   --scope <repository|workspace>   observation scope (default: repository)
   --scope <all|repository|workspace>
-                                   query/why visibility (default: all)
+                                   search/query/why visibility (default: all)
+
+Other search options:
+  --limit <positive-integer>       maximum result rows (default: 50)
 
 Other observe options:
   --ts <unix-seconds>              fact validity/assertion time (default: now)
@@ -89,11 +93,47 @@ fn command(args: Vec<String>) -> Result<String, String> {
     match command {
         "help" | "--help" | "-h" => Ok(USAGE.to_string()),
         "observe" => observe(&args[1..]),
+        "search" => search(&args[1..]),
         "query" => query(&args[1..], false),
         "why" => why(&args[1..]),
         "skill" => skill(&args[1..]),
         other => Err(format!("unknown command {other:?}")),
     }
+}
+
+fn search(args: &[String]) -> Result<String, String> {
+    let (path, pattern, workspace_override, scope, limit) = parse_search_args(args)?;
+    let context = resolve_context(&path, workspace_override.as_deref())?;
+    let repository_scope = scope_name(&context, Scope::Repository);
+    let (selected_scopes, include_legacy) = match scope {
+        Scope::All => (None, true),
+        Scope::Workspace => (Some(["workspace".to_string()].into_iter().collect()), false),
+        Scope::Repository => (
+            Some(
+                ["workspace".to_string(), repository_scope.clone()]
+                    .into_iter()
+                    .collect(),
+            ),
+            !context.workspace.marked,
+        ),
+    };
+    let result = crate::search::search_snapshot(
+        &context.workspace.snapshot,
+        &pattern,
+        limit,
+        selected_scopes,
+        repository_scope,
+        include_legacy,
+    )
+    .map_err(|error| format!("search: {error}"))?;
+    if result.rows.is_empty() {
+        return Ok("(no answers)".to_string());
+    }
+    let mut output = result.rows.join("\n");
+    if result.truncated {
+        output.push_str(&format!("\ntruncated: limit ({limit} shown, more matched)"));
+    }
+    Ok(output)
 }
 
 fn skill(args: &[String]) -> Result<String, String> {
@@ -389,6 +429,56 @@ fn parse_read_args(
         positional.remove(1),
         workspace,
         scope,
+    ))
+}
+
+fn parse_search_args(
+    args: &[String],
+) -> Result<(PathBuf, String, Option<PathBuf>, Scope, usize), String> {
+    let mut positional = Vec::new();
+    let mut workspace = None;
+    let mut scope = Scope::All;
+    let mut limit = 50usize;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--workspace" => {
+                index += 1;
+                workspace = Some(PathBuf::from(
+                    args.get(index).ok_or("--workspace requires a path")?,
+                ));
+            }
+            "--scope" => {
+                index += 1;
+                scope = parse_scope(args.get(index).ok_or("--scope requires a value")?, true)?;
+            }
+            "--limit" => {
+                index += 1;
+                limit = args
+                    .get(index)
+                    .ok_or("--limit requires a positive integer")?
+                    .parse()
+                    .map_err(|_| "--limit requires a positive integer".to_string())?;
+                if limit == 0 {
+                    return Err("--limit requires a positive integer".to_string());
+                }
+            }
+            option if option.starts_with('-') => {
+                return Err(format!("unknown search option {option:?}"));
+            }
+            _ => positional.push(args[index].clone()),
+        }
+        index += 1;
+    }
+    if positional.len() != 2 {
+        return Err("search requires <path> and one quoted pattern argument".to_string());
+    }
+    Ok((
+        PathBuf::from(&positional[0]),
+        positional.remove(1),
+        workspace,
+        scope,
+        limit,
     ))
 }
 

@@ -1,0 +1,6 @@
+alpha_service --describes--> RustSearch
+beta_worker --handles--> parse_error
+delta_cli --emits--> candidate_row
+epsilon_store --contains--> vocabulary_terms
+gamma_api --uses--> Searcher
+zeta_history --contains--> closed_episode

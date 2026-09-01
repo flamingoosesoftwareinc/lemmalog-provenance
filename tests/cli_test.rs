@@ -436,3 +436,299 @@ fn explicit_workspace_override_and_nearest_marker_are_deterministic() {
     );
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn cli_search_snapshot_preserves_complete_rows_order_and_truncation() {
+    // Kill claim: dropped/reordered row fields, annotations, lexical rank,
+    // scope labels, or truncation changes the complete snapshot.
+    let root = temp_root("search-snapshot");
+    let workspace = root.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(workspace.join(".lemmalog"), "id = \"search-suite\"\n").unwrap();
+    let repo = repository(
+        &workspace.join("service"),
+        "git@github.com:example/service.git",
+    );
+    let data = root.join("data");
+    let facts = include_str!("testdata/inputs/search-facts.txt");
+    let observed = cli()
+        .env("XDG_DATA_HOME", &data)
+        .args([
+            "observe",
+            repo.to_str().unwrap(),
+            facts,
+            "--ts",
+            "100",
+            "--provenance",
+            "ref,with,commas",
+            "--provenance",
+            r"literal\n\t\",
+        ])
+        .output()
+        .unwrap();
+    assert!(observed.status.success());
+    let shared = cli()
+        .env("XDG_DATA_HOME", &data)
+        .args([
+            "observe",
+            repo.to_str().unwrap(),
+            "shared_index --describes--> search_vocabulary",
+            "--scope",
+            "workspace",
+            "--ts",
+            "100",
+            "--provenance",
+            "git://shared/source#L1",
+        ])
+        .output()
+        .unwrap();
+    assert!(shared.status.success());
+
+    let searched = cli()
+        .env("XDG_DATA_HOME", &data)
+        .args([
+            "search",
+            repo.to_str().unwrap(),
+            "search|candidate|vocabulary",
+            "--limit",
+            "4",
+        ])
+        .output()
+        .unwrap();
+    assert!(searched.status.success());
+    insta::assert_snapshot!(
+        "cli_search_representative",
+        String::from_utf8(searched.stdout).unwrap().trim_end()
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cli_search_honors_smart_case_regex_no_answer_and_limits() {
+    // Kill claim: smart-case, regex compilation, empty behavior, or either
+    // result cap changes an exact boundary assertion.
+    let root = temp_root("search-matching");
+    let repo = repository(&root, "git@github.com:example/matching.git");
+    let data = root.join("data");
+
+    let empty = cli()
+        .env("XDG_DATA_HOME", &data)
+        .args(["search", repo.to_str().unwrap(), "anything"])
+        .output()
+        .unwrap();
+    assert!(empty.status.success());
+    assert_eq!(
+        String::from_utf8(empty.stdout).unwrap().trim(),
+        "(no answers)"
+    );
+
+    let facts = (0..51)
+        .map(|index| format!("item{index:02} --describes--> RustSearch"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let observed = cli()
+        .env("XDG_DATA_HOME", &data)
+        .args([
+            "observe",
+            repo.to_str().unwrap(),
+            facts.as_str(),
+            "--ts",
+            "100",
+        ])
+        .output()
+        .unwrap();
+    assert!(observed.status.success());
+
+    let lowercase = cli()
+        .env("XDG_DATA_HOME", &data)
+        .args([
+            "search",
+            repo.to_str().unwrap(),
+            "rustsearch",
+            "--limit",
+            "1",
+        ])
+        .output()
+        .unwrap();
+    let lowercase = String::from_utf8(lowercase.stdout).unwrap();
+    assert_eq!(lowercase.lines().count(), 2);
+    assert_eq!(
+        lowercase.lines().last(),
+        Some("truncated: limit (1 shown, more matched)")
+    );
+
+    let uppercase = cli()
+        .env("XDG_DATA_HOME", &data)
+        .args(["search", repo.to_str().unwrap(), "RUSTSEARCH"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(uppercase.stdout).unwrap().trim(),
+        "(no answers)"
+    );
+
+    let default_limit = cli()
+        .env("XDG_DATA_HOME", &data)
+        .args(["search", repo.to_str().unwrap(), "RustSearch|never"])
+        .output()
+        .unwrap();
+    let default_limit = String::from_utf8(default_limit.stdout).unwrap();
+    assert_eq!(default_limit.lines().count(), 51);
+    assert_eq!(
+        default_limit.lines().last(),
+        Some("truncated: limit (50 shown, more matched)")
+    );
+
+    for invalid_limit in ["0", "nope"] {
+        let rejected = cli()
+            .env("XDG_DATA_HOME", &data)
+            .args([
+                "search",
+                repo.to_str().unwrap(),
+                ".",
+                "--limit",
+                invalid_limit,
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(rejected.status.code(), Some(2));
+        assert_eq!(rejected.stdout, b"");
+    }
+    let invalid_regex = cli()
+        .env("XDG_DATA_HOME", &data)
+        .args(["search", repo.to_str().unwrap(), "["])
+        .output()
+        .unwrap();
+    assert_eq!(invalid_regex.status.code(), Some(2));
+    assert_eq!(invalid_regex.stdout, b"");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cli_search_honors_scope_time_and_opaque_provenance_across_processes() {
+    // Kill claim: scope selection, either temporal inequality, supersession,
+    // or provenance codec drift changes these process-boundary results.
+    let root = temp_root("search-policy");
+    let workspace = root.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(workspace.join(".lemmalog"), "id = \"policy-suite\"\n").unwrap();
+    let first = repository(&workspace.join("first"), "git@github.com:example/first.git");
+    let second = repository(
+        &workspace.join("second"),
+        "git@github.com:example/second.git",
+    );
+    let data = root.join("data");
+    let observations = [
+        (&first, "repo_one --matches--> needle", "repository", "100"),
+        (&second, "repo_two --matches--> needle", "repository", "100"),
+        (&first, "shared --matches--> needle", "workspace", "100"),
+        (&first, "alice --works_at--> old_place", "repository", "100"),
+        (&first, "alice --works_at--> new_place", "repository", "200"),
+        (
+            &first,
+            "future --matches--> future_needle",
+            "repository",
+            "300",
+        ),
+        (&first, "clock --matches--> now_needle", "repository", "200"),
+    ];
+    for (repo, fact, scope, timestamp) in observations {
+        let mut command = cli();
+        command.env("XDG_DATA_HOME", &data).args([
+            "observe",
+            repo.to_str().unwrap(),
+            fact,
+            "--scope",
+            scope,
+            "--ts",
+            timestamp,
+        ]);
+        if fact == "clock --matches--> now_needle" {
+            command.args([
+                "--provenance",
+                "caller,comma",
+                "--provenance",
+                r"literal\n\t\",
+            ]);
+        }
+        assert!(command.output().unwrap().status.success());
+    }
+
+    let repository_rows = cli()
+        .env("XDG_DATA_HOME", &data)
+        .args([
+            "search",
+            first.to_str().unwrap(),
+            "matches--> needle\\t",
+            "--scope",
+            "repository",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(repository_rows.stdout).unwrap().trim(),
+        "repository:git@github.com:example/first.git\trepo_one --matches--> needle\tprovenance=ep1\nworkspace\tshared --matches--> needle\tprovenance=ep3"
+    );
+
+    let workspace_rows = cli()
+        .env("XDG_DATA_HOME", &data)
+        .args([
+            "search",
+            second.to_str().unwrap(),
+            "matches--> needle\\t",
+            "--scope",
+            "workspace",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(workspace_rows.stdout).unwrap().trim(),
+        "workspace\tshared --matches--> needle\tprovenance=ep3"
+    );
+    let all_rows = cli()
+        .env("XDG_DATA_HOME", &data)
+        .args([
+            "search",
+            second.to_str().unwrap(),
+            "matches--> needle\\t",
+            "--scope",
+            "all",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(all_rows.stdout).unwrap().trim(),
+        concat!(
+            "repository:git@github.com:example/first.git\trepo_one --matches--> needle\tprovenance=ep1\n",
+            "repository:git@github.com:example/second.git\trepo_two --matches--> needle\tprovenance=ep2\n",
+            "workspace\tshared --matches--> needle\tprovenance=ep3"
+        )
+    );
+
+    let superseded = cli()
+        .env("XDG_DATA_HOME", &data)
+        .args(["search", first.to_str().unwrap(), "old_place"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(superseded.stdout).unwrap().trim(),
+        "(no answers)"
+    );
+    let current = cli()
+        .env("XDG_DATA_HOME", &data)
+        .args([
+            "search",
+            first.to_str().unwrap(),
+            "new_place|future_needle|now_needle",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(current.stdout).unwrap().trim(),
+        concat!(
+            "repository:git@github.com:example/first.git\talice --works_at--> new_place\tprovenance=ep5\n",
+            "repository:git@github.com:example/first.git\tclock --matches--> now_needle\tprovenance=caller,comma,ep7,literal\\n\\t\\"
+        )
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}

@@ -704,8 +704,14 @@ lemmalog observe /work/payments/src/db.rs \
   'payment_service --uses--> postgres' \
   --ts 100 --provenance 'https://github.com/acme/payments/blob/abc123/src/db.rs#L20-L35' \
   --captured-at 2026-08-29T19:42:00Z
+# Exact vocabulary known: query first.
 lemmalog query /work/payments 'current("payment_service", "uses", O)'
 lemmalog why /work/payments 'current(payment_service, uses, postgres)'
+# Vocabulary unknown: use a few basic lexical probes, then query exact terms.
+lemmalog search /work/payments 'timeout' --limit 10
+lemmalog search /work/payments 'retry|backoff' --limit 10
+lemmalog query /work/payments 'current("payment_client", "retry_policy", O)'
+lemmalog why /work/payments 'current(payment_client, retry_policy, exponential_backoff)'
 lemmalog observe /work/payments 'PaymentSettled --means--> completed_payment' \
   --scope workspace --provenance 'git://payments/abc123/events.go#L10-L18'
 lemmalog query /work/payments \
@@ -714,13 +720,29 @@ lemmalog query /work/payments \
 
 Observations default to repository scope. Queries see the resolved workspace by
 default; `--scope repository` selects the target repository plus shared
-workspace facts, and `--scope workspace` selects shared facts only. Each
-invocation loads one snapshot, performs one operation, saves mutations, and
-exits. Capture timestamps are kept in a sidecar. Provenance values remain
-opaque, so GitHub, Git, local files, LSP locations, and other evidence schemes
-can be supplied by callers. Prefer host-generated, commit-pinned permalinks that
-open the exact cited source; GitHub, GitLab, Bitbucket, and editor URL formats
-differ. Stores live under the user data directory, outside the workspace.
+workspace facts, and `--scope workspace` selects shared facts only. Search uses
+the same visibility rules, ripgrep-compatible Rust regex syntax, smart case,
+stable lexical output, and a default limit of 50. It streams current `edge` and
+`scoped_edge` facts without loading the reasoning engine. Lowercase patterns
+ignore case; patterns with uppercase letters preserve case.
+
+When exact domain vocabulary is known, use `query` first. Otherwise, extract a
+small set of concrete nouns, verbs or relationships, quoted errors, and symbol
+fragments from the question. Run simple `search` probes one at a time with
+conservative limits; do not submit the full natural-language question as one
+regex. Expand only from returned subjects, predicates, or objects, and stop as
+soon as an exact query can be formed. If no useful initial probe exists, use one
+bounded vocabulary browse: `lemmalog search <path> '.*' --limit 50`. Then query
+exact facts or rules and use `why` before trusting or citing a claim. This is
+bounded discovery, not an autonomous workspace scan.
+
+Each mutating invocation loads one snapshot, performs one operation, saves the
+mutation, and exits. Capture timestamps are kept in a sidecar. Provenance values
+remain opaque, so GitHub, Git, local files, LSP locations, and other evidence
+schemes can be supplied by callers. Prefer host-generated, commit-pinned
+permalinks that open the exact cited source; GitHub, GitLab, Bitbucket, and
+editor URL formats differ. Stores live under the user data directory, outside
+the workspace.
 
 ```sh
 cargo run --bin lemmalog          # interactive REPL (or pipe a script)

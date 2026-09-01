@@ -27,11 +27,29 @@ The skill is embedded in the binary. `skill install` writes or updates `~/.agent
 
 ## Use
 
-1. Query relevant known facts before code discovery. An empty result means continue normally, not bootstrap a repository scan:
+1. Select the smallest read path:
+
+   - Exact domain vocabulary known → query first:
 
    ```sh
    lemmalog query <repo-path> 'current("subject", "predicate", O)'
    ```
+
+   - Vocabulary unknown → extract a small bounded set of concrete nouns, verbs or relationships, quoted errors, and symbol fragments from the question. Run basic lexical probes one at a time with conservative limits. Do not use the full natural-language question as one regex:
+
+   ```sh
+   lemmalog search <repo-path> 'timeout' --limit 10
+   lemmalog search <repo-path> 'retry|backoff' --limit 10
+   lemmalog search <repo-path> 'ClientError' --limit 10
+   ```
+
+   Expand probes only from subjects, predicates, or objects returned by the prior probe. Stop when enough terms exist for an exact `query`. If no useful probe can be formed, browse only the bounded stored vocabulary:
+
+   ```sh
+   lemmalog search <repo-path> '.*' --limit 50
+   ```
+
+   Search streams current stored base facts. It is not a workspace scan. Lowercase patterns ignore case; uppercase patterns preserve case. The default limit is 50. An empty search or query result means continue with normal code tools, not bootstrap a repository scan.
 
 2. Confirm claims with source, Git, LSP, or another primary tool. Lemmalog memory is evidence to inspect, not authority.
 3. Record concise, reusable relationships after confirmation:
@@ -51,9 +69,10 @@ The skill is embedded in the binary. `skill install` writes or updates `~/.agent
    For another host or editor, use its **Copy permalink** action or official URL contract; do not invent a template. Never cite a mutable branch URL as permanent evidence. `--provenance` remains opaque: Lemmalog stores and propagates it without interpreting or validating its scheme. Repeat the argument for multiple sources. Avoid tabs and newlines because the evidence sidecar is line-oriented.
    Observations default to the containing repository. Use `--scope workspace` only for a fact that applies across the workspace. Queries see all workspace repositories by default; use `--scope repository` for the target repository plus shared facts, or `--scope workspace` for shared facts only.
    For an end-to-end join, query with one temporary Datalog rule, for example: `lemmalog query . 'flow(S) :- current("payments", "emits", E), current(E, "handled_by", S)'`.
-4. Before presenting or relying on a remembered claim, inspect its derivation:
+4. Use discovered vocabulary in an exact query, then inspect the derivation before presenting, trusting, or citing the claim:
 
    ```sh
+   lemmalog query <repo-path> 'current("payment_client", "retry_policy", O)'
    lemmalog why <repo-path> 'current(subject, predicate, object)'
    ```
 

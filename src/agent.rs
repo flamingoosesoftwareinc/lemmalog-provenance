@@ -917,74 +917,32 @@ impl Engine {
 
 // ------------------------------------------------------------- persistence
 
-/// Argument representation while parsing a snapshot (symbols intern
-/// against the target engine once it exists).
-enum ArgRepr {
-    S(String),
-    I(i64),
-}
-
-/// Escape a field for the tab-separated snapshot format.
-fn esc(s: &str) -> String {
-    // spaces too: snapshot fields and fact args are space-separated, so
-    // multi-word symbols (extracted entities like "United Airlines") must
-    // not split on reload
-    s.replace('\\', "\\\\")
-        .replace('\t', "\\t")
-        .replace('\n', "\\n")
-        .replace(' ', "\\s")
-}
-
-fn unesc(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut it = s.chars();
-    while let Some(c) = it.next() {
-        if c == '\\' {
-            match it.next() {
-                Some('t') => out.push('\t'),
-                Some('n') => out.push('\n'),
-                Some('s') => out.push(' '),
-                Some('\\') => out.push('\\'),
-                Some(other) => {
-                    out.push('\\');
-                    out.push(other);
-                }
-                None => out.push('\\'),
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
-
-const SNAPSHOT_MAGIC: &str = "LEMMALOG1";
-/// Pre-rename snapshots (read-only compatibility).
-const SNAPSHOT_MAGIC_V0: &str = "CORTEXLOG1";
-
 impl<X: Extractor> AgentMemory<X> {
     /// Persist to a snapshot file: rules, clock, episodes (verbatim
     /// sources), escalation queue, and all base (EDB) facts with their
     /// annotations. Derived relations are NOT persisted — they are
     /// rebuildable projections, recomputed by `load()`.
     pub fn save(&self, path: &str) -> std::io::Result<()> {
-        use std::fmt::Write as _;
-        let mut out = String::new();
-        let _ = writeln!(out, "{SNAPSHOT_MAGIC}");
-        let _ = writeln!(out, "NOW\t{}", self.engine.now);
-        let _ = writeln!(out, "RULES\t{}", esc(&self.extra_rules));
+        use crate::snapshot::{encode_provenance, escape, SNAPSHOT_MAGIC};
+        use std::io::{BufWriter, Write};
+
+        let file = std::fs::File::create(path)?;
+        let mut out = BufWriter::new(file);
+        writeln!(out, "{SNAPSHOT_MAGIC}")?;
+        writeln!(out, "NOW\t{}", self.engine.now)?;
+        writeln!(out, "RULES\t{}", escape(&self.extra_rules))?;
         for ep in &self.episodes {
-            let _ = writeln!(
+            writeln!(
                 out,
                 "EP\t{}\t{}\t{}\t{}",
-                esc(&ep.id),
+                escape(&ep.id),
                 ep.ts,
-                ep.speaker.as_deref().unwrap_or(""),
-                esc(&ep.text)
-            );
+                escape(ep.speaker.as_deref().unwrap_or("")),
+                escape(&ep.text)
+            )?;
         }
         for e in &self.escalations {
-            let _ = writeln!(out, "ESC\t{}", esc(e));
+            writeln!(out, "ESC\t{}", escape(e))?;
         }
         for (pred, rel) in &self.engine.relations {
             // base facts only: skip predicates defined by rules (they are
@@ -993,114 +951,88 @@ impl<X: Extractor> AgentMemory<X> {
                 continue;
             }
             for row in &rel.rows {
-                let prov = row.fact.ann.prov.iter().cloned().collect::<Vec<_>>().join(",");
+                let provenance = encode_provenance(row.fact.ann.prov.iter());
                 let args = row
                     .key
                     .iter()
                     .map(|v| match v {
-                        Value::Sym(s) => format!("s:{}", esc(self.engine.interner.resolve(*s))),
+                        Value::Sym(s) => {
+                            format!("s:{}", escape(self.engine.interner.resolve(*s)))
+                        }
                         Value::Int(i) => format!("i:{i}"),
                     })
                     .collect::<Vec<_>>()
                     .join(" ");
-                let _ = writeln!(
+                writeln!(
                     out,
                     "FACT\t{}\t{}\t{}\t{}",
-                    pred, row.fact.ann.conf, prov, args
-                );
+                    pred, row.fact.ann.conf, provenance, args
+                )?;
             }
         }
-        std::fs::write(path, out)
+        out.flush()
     }
 
     /// Load a snapshot into a fresh memory with the given extractor.
     /// Base facts are re-asserted with their annotations; derived
     /// relations are rebuilt by one maintenance run.
-    pub fn load(
-        extractor: X,
-        path: &str,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        let text = std::fs::read_to_string(path)?;
-        let mut lines = text.lines();
-        let magic = lines.next();
-        if magic != Some(SNAPSHOT_MAGIC) && magic != Some(SNAPSHOT_MAGIC_V0) {
-            return Err("not a lemmalog snapshot".into());
-        }
-        let mut rules = String::new();
-        let mut now = 0i64;
-        let mut episodes = Vec::new();
-        let mut escalations = Vec::new();
-        let mut facts: Vec<(String, f64, Vec<String>, Vec<ArgRepr>)> = Vec::new();
-        for line in lines {
-            let Some((tag, rest)) = line.split_once('\t') else {
-                continue;
-            };
-            match tag {
-                "NOW" => now = rest.parse()?,
-                "RULES" => rules = unesc(rest),
-                "EP" => {
-                    let mut f = rest.splitn(4, '\t');
-                    let (Some(id), Some(ts), Some(speaker), Some(txt)) =
-                        (f.next(), f.next(), f.next(), f.next())
-                    else {
-                        return Err("bad EP record".into());
-                    };
-                    episodes.push(Episode {
-                        id: unesc(id),
-                        ts: ts.parse()?,
-                        speaker: if speaker.is_empty() {
-                            None
-                        } else {
-                            Some(unesc(speaker))
-                        },
-                        text: unesc(txt),
-                    });
+    pub fn load(extractor: X, path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        use crate::snapshot::{SnapshotReader, SnapshotRecord, SnapshotValue};
+        use std::io::BufReader;
+
+        let file = std::fs::File::open(path)?;
+        let mut records = SnapshotReader::new(BufReader::new(file))?;
+        let now = match records.next().transpose()? {
+            Some(SnapshotRecord::Now(now)) => now,
+            _ => return Err("snapshot is missing its NOW record".into()),
+        };
+        let rules = match records.next().transpose()? {
+            Some(SnapshotRecord::Rules(rules)) => rules,
+            _ => return Err("snapshot is missing its RULES record".into()),
+        };
+        let mut memory = AgentMemory::new(extractor, &rules)?;
+        for record in records {
+            match record? {
+                SnapshotRecord::Episode {
+                    id,
+                    timestamp,
+                    speaker,
+                    text,
+                } => memory.episodes.push(Episode {
+                    id,
+                    ts: timestamp,
+                    speaker,
+                    text,
+                }),
+                SnapshotRecord::Escalation(escalation) => {
+                    memory.escalations.push(escalation);
                 }
-                "ESC" => escalations.push(unesc(rest)),
-                "FACT" => {
-                    let mut f = rest.splitn(4, '\t');
-                    let (Some(pred), Some(conf), Some(prov), Some(args)) =
-                        (f.next(), f.next(), f.next(), f.next())
-                    else {
-                        return Err("bad FACT record".into());
-                    };
-                    let mut vals = Vec::new();
-                    for a in args.split(' ').filter(|s| !s.is_empty()) {
-                        if let Some(sym) = a.strip_prefix("s:") {
-                            vals.push(ArgRepr::S(unesc(sym)));
-                        } else if let Some(i) = a.strip_prefix("i:") {
-                            vals.push(ArgRepr::I(i.parse()?));
-                        } else {
-                            return Err(format!("bad arg {a:?}").into());
-                        }
-                    }
-                    let prov: Vec<String> = prov
-                        .split(',')
-                        .filter(|s| !s.is_empty())
-                        .map(unesc)
+                SnapshotRecord::Fact {
+                    predicate,
+                    confidence,
+                    provenance,
+                    arguments,
+                } => {
+                    let resolved: Vec<Value> = arguments
+                        .into_iter()
+                        .map(|value| match value {
+                            SnapshotValue::Symbol(name) => memory.engine.sym(&name),
+                            SnapshotValue::Integer(integer) => Value::Int(integer),
+                        })
                         .collect();
-                    facts.push((pred.to_string(), conf.parse()?, prov, vals));
+                    memory
+                        .engine
+                        .declare(&predicate, &resolved, Ann::base(confidence, provenance));
                 }
-                _ => {}
+                SnapshotRecord::Now(_) | SnapshotRecord::Rules(_) => {
+                    return Err("snapshot contains a duplicate header record".into());
+                }
             }
         }
-        let mut m = AgentMemory::new(extractor, &rules)?;
-        m.escalations = escalations;
-        m.episodes = episodes;
-        m.episode_counter = m.episodes.len() as u64;
-        for (pred, conf, prov, args) in facts {
-            let resolved: Vec<Value> = args
-                .into_iter()
-                .map(|v| match v {
-                    ArgRepr::S(name) => m.engine.sym(&name),
-                    ArgRepr::I(i) => Value::Int(i),
-                })
-                .collect();
-            m.engine.declare(&pred, &resolved, Ann::base(conf, prov));
-        }
-        m.engine.set_now(now);
-        let _ = m.engine.run();
-        m.last_turn_epoch = m.engine.epoch();
-        Ok(m)
+        memory.episode_counter = memory.episodes.len() as u64;
+        memory.engine.set_now(now);
+        let _ = memory.engine.run();
+        memory.last_turn_epoch = memory.engine.epoch();
+        Ok(memory)
     }
 }
