@@ -387,8 +387,9 @@ mod tests {
     #[test]
     fn streaming_search_bounds_decoder_and_result_owners() -> Result<(), Box<dyn std::error::Error>>
     {
-        // Kill claim: buffering the snapshot or retaining every match exceeds
-        // these owner-level peaks; losing lexical ranking changes exact rows.
+        // Kill claim: unbounded growth in SnapshotReader's record buffer or
+        // BoundedMatches' heap exceeds its owner peak; losing lexical ranking
+        // changes the exact rows.
         let path = snapshot_path("bounds")?;
         let mut memory = AgentMemory::new(MockExtractor::new(0.9), "")?;
         for index in 0..2_000 {
