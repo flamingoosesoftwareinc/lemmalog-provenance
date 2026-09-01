@@ -41,7 +41,14 @@ The skill is embedded in the binary. `skill install` writes or updates `~/.agent
      --provenance 'https://github.com/owner/repo/blob/commit/path#L20-L35'
    ```
 
-   Pin source provenance to a commit and exact line range when possible. For GitHub, use an HTTPS permalink: `https://github.com/<owner>/<repo>/blob/<full-sha>/<path>#L20-L35` (or `#L20` for one line), never a branch URL. `--provenance` remains opaque: Lemmalog stores and propagates it without interpreting or validating its scheme. Use `git:`, `file:`, `https:`, `otel:`, or another durable scheme when GitHub does not apply, and repeat the argument for multiple sources. Avoid tabs and newlines because the evidence sidecar is line-oriented.
+   Pin source provenance to a commit and exact line range when possible. Prefer a clickable permalink produced by the source host, and verify it opens the cited source before recording it. Known formats differ:
+
+   - GitHub: `https://github.com/<owner>/<repo>/blob/<full-sha>/<path>#L20-L35`
+   - GitLab: `https://gitlab.com/<namespace>/<repo>/-/blob/<full-sha>/<path>#L20-35`
+   - Bitbucket Cloud: `https://bitbucket.org/<workspace>/<repo>/src/<full-sha>/<path>#<filename>-20`; use its source view's copied URL for a multi-line selection.
+   - Local source: use `file:///absolute/path` when opening the file is sufficient, or a verified editor deep link such as `vscode://file/<absolute-path>:20:1` when exact navigation is required.
+
+   For another host or editor, use its **Copy permalink** action or official URL contract; do not invent a template. Never cite a mutable branch URL as permanent evidence. `--provenance` remains opaque: Lemmalog stores and propagates it without interpreting or validating its scheme. Repeat the argument for multiple sources. Avoid tabs and newlines because the evidence sidecar is line-oriented.
    Observations default to the containing repository. Use `--scope workspace` only for a fact that applies across the workspace. Queries see all workspace repositories by default; use `--scope repository` for the target repository plus shared facts, or `--scope workspace` for shared facts only.
    For an end-to-end join, query with one temporary Datalog rule, for example: `lemmalog query . 'flow(S) :- current("payments", "emits", E), current(E, "handled_by", S)'`.
 4. Before presenting or relying on a remembered claim, inspect its derivation:

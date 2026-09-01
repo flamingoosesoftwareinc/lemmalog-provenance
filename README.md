@@ -695,8 +695,9 @@ workspace facts, and `--scope workspace` selects shared facts only. Each
 invocation loads one snapshot, performs one operation, saves mutations, and
 exits. Capture timestamps are kept in a sidecar. Provenance values remain
 opaque, so GitHub, Git, local files, LSP locations, and other evidence schemes
-can be supplied by callers. Stores live under the user data directory, outside
-the workspace.
+can be supplied by callers. Prefer host-generated, commit-pinned permalinks that
+open the exact cited source; GitHub, GitLab, Bitbucket, and editor URL formats
+differ. Stores live under the user data directory, outside the workspace.
 
 ```sh
 cargo run --bin lemmalog          # interactive REPL (or pipe a script)
