@@ -10,11 +10,14 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+const EMBEDDED_SKILL: &str = include_str!("../skills/lemmalog/SKILL.md");
+
 const USAGE: &str = "Usage:
   lemmalog                         start the interactive REPL
   lemmalog observe <path> <facts> [options]
   lemmalog query <path> <goal> [options]
   lemmalog why <path> <fact> [options]
+  lemmalog skill install [--path <skills-directory>]
 
 Workspace and scope options:
   --workspace <path>               override .lemmalog workspace discovery
@@ -88,8 +91,43 @@ fn command(args: Vec<String>) -> Result<String, String> {
         "observe" => observe(&args[1..]),
         "query" => query(&args[1..], false),
         "why" => why(&args[1..]),
+        "skill" => skill(&args[1..]),
         other => Err(format!("unknown command {other:?}")),
     }
+}
+
+fn skill(args: &[String]) -> Result<String, String> {
+    if args.first().map(String::as_str) != Some("install") {
+        return Err("skill requires install".to_string());
+    }
+    let mut skills_directory = None;
+    let mut index = 1;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--path" => {
+                index += 1;
+                skills_directory = Some(PathBuf::from(
+                    args.get(index)
+                        .ok_or("--path requires a skills directory")?,
+                ));
+            }
+            option => return Err(format!("unknown skill install option {option:?}")),
+        }
+        index += 1;
+    }
+    let skills_directory = match skills_directory {
+        Some(path) => path,
+        None => PathBuf::from(env::var_os("HOME").ok_or("HOME is not set")?)
+            .join(".agents")
+            .join("skills"),
+    };
+    let directory = skills_directory.join("lemmalog");
+    std::fs::create_dir_all(&directory)
+        .map_err(|error| format!("create skill directory {}: {error}", directory.display()))?;
+    let destination = directory.join("SKILL.md");
+    std::fs::write(&destination, EMBEDDED_SKILL)
+        .map_err(|error| format!("install skill {}: {error}", destination.display()))?;
+    Ok(format!("skill={}", destination.display()))
 }
 
 fn observe(args: &[String]) -> Result<String, String> {

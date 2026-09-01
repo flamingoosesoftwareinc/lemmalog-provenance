@@ -85,21 +85,18 @@ evaluation. Both caught by the differential harness.
 
 ## The lemmalog skill
 
-`skills/lemmalog/SKILL.md` teaches agents to use the repository-scoped CLI as
+`skills/lemmalog/SKILL.md` teaches agents to use the workspace-scoped CLI as
 durable code memory. It queries before normal code discovery, hydrates the
 store lazily as facts are verified, and requires commit-pinned provenance in
-user-facing answers. It never scans a repository only to initialize a store.
-Install the skill for your agent, for example:
+user-facing answers. It never scans a workspace only to initialize a store.
+The binary embeds the matching skill and installs it offline:
 
 ```sh
-# Claude Code (user scope)
-mkdir -p ~/.claude/skills && cp -r skills/lemmalog ~/.claude/skills/
-
-# Kimi CLI: copy the same folder into its skills directory
-# (e.g. ~/.kimi/skills/lemmalog/ — see its skills docs)
+lemmalog skill install                         # ~/.agents/skills
+lemmalog skill install --path ~/.claude/skills # another agent
 ```
 
-Install the `lemmalog` binary separately as described under **Run** below.
+Install the `lemmalog` binary first as described under **Run** below.
 
 ## MCP server: use from Claude Code or Kimi CLI
 

@@ -40,6 +40,43 @@ fn cli() -> Command {
 }
 
 #[test]
+fn cli_installs_embedded_skill_to_default_and_custom_directories() {
+    let root = temp_root("skill-install");
+    let installed = cli()
+        .env("HOME", &root)
+        .args(["skill", "install"])
+        .output()
+        .unwrap();
+    assert!(
+        installed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&installed.stderr)
+    );
+    let default_destination = root.join(".agents/skills/lemmalog/SKILL.md");
+    assert_eq!(
+        String::from_utf8(installed.stdout).unwrap().trim(),
+        format!("skill={}", default_destination.display())
+    );
+    assert_eq!(
+        std::fs::read_to_string(&default_destination).unwrap(),
+        include_str!("../skills/lemmalog/SKILL.md")
+    );
+
+    let custom = root.join("custom-skills");
+    let updated = cli()
+        .env("HOME", root.join("unused-home"))
+        .args(["skill", "install", "--path", custom.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(updated.status.success());
+    assert_eq!(
+        std::fs::read_to_string(custom.join("lemmalog/SKILL.md")).unwrap(),
+        include_str!("../skills/lemmalog/SKILL.md")
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn cli_persists_and_explains_repository_facts_from_outside_checkout() {
     let root = temp_root("persistence");
     let repo = repository(&root, "git@github.com:example/persistence.git");

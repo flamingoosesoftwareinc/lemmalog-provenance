@@ -12,8 +12,11 @@ Use Lemmalog as durable memory for code evidence. For every question about code,
 If `lemmalog` is absent, install it once:
 
 ```sh
-cargo install --git ssh://git@github.com/flamingoosesoftwareinc/lemmalog-provenance.git --bin lemmalog --locked
+cargo install --git https://github.com/flamingoosesoftwareinc/lemmalog-provenance.git --bin lemmalog --locked
+lemmalog skill install
 ```
+
+The skill is embedded in the binary. `skill install` writes or updates `~/.agents/skills/lemmalog/SKILL.md`; use `--path <skills-directory>` for another agent or repository-local skills directory.
 
 ## When to use
 
