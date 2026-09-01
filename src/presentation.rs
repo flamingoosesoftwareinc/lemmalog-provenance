@@ -51,7 +51,12 @@ pub(crate) fn render_search(
     limit: usize,
 ) -> Result<String, String> {
     if output.rows.is_empty() {
-        return Ok("(no answers)".to_string());
+        return Ok(match format {
+            SearchFormat::Json => {
+                format!("{{\"results\":[],\"truncated\":false,\"limit\":{limit}}}")
+            }
+            SearchFormat::Canonical | SearchFormat::Text => "(no answers)".to_string(),
+        });
     }
     let model = update(
         Model {
@@ -261,6 +266,19 @@ mod tests {
     fn json_view_is_structured() {
         let rendered = render_search(&output(), SearchFormat::Json, 2).unwrap();
         insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn empty_json_view_is_structured() {
+        let output = SearchOutput {
+            rows: Vec::new(),
+            truncated: false,
+            stats: Default::default(),
+        };
+        assert_eq!(
+            render_search(&output, SearchFormat::Json, 7).unwrap(),
+            "{\"results\":[],\"truncated\":false,\"limit\":7}"
+        );
     }
 
     #[test]
