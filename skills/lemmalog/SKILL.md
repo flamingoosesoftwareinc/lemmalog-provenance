@@ -101,6 +101,43 @@ are workspace-scoped by the selected context; derived relations rebuild after
 restart, and `why` retains opaque provenance. Use the normal CLI search/query/
 why flow for discovery. Do not put raw Datalog programs into `observe`.
 
+## DDD and Gherkin conventions
+
+Use constructor predicates as the type tag; do not repeat the type in names
+(`"Order"`, not `"entity/Order"`):
+
+```sh
+printf '%s\n' \
+  '+ entity("Order") #domain' \
+  '+ aggregate("Order") #domain' \
+  '+ command("CancelOrder") #domain' \
+  '+ event("OrderCancelled") #domain' \
+  '+ state("Order", "paid") #domain' \
+  '+ state("Order", "cancelled") #domain' \
+  '+ transition("Order", "paid", "CancelOrder", "cancelled") #domain' \
+  '+ scenario("cancel-paid-order") #scenario' \
+  '+ given("cancel-paid-order", 1, "Order is paid") #scenario' \
+  '+ when("cancel-paid-order", 2, "CancelOrder") #scenario' \
+  '+ then("cancel-paid-order", 3, "OrderCancelled") #scenario' \
+  'rule valid_transition(A,F,C,T) :- transition(A,F,C,T), state(A,F), command(C), state(A,T)' \
+  'run' \
+  '? valid_transition(A,F,C,T)' \
+  'exit' | lemmalog
+```
+
+`scenario`, `given`, `when`, and `then` are conventions; the numeric step
+argument preserves Gherkin order. Add explicit contradiction rules, for example:
+
+```text
+rule contradictory_outcome(S,A,O1,O2) :- outcome(S,A,O1), outcome(S,A,O2), O1 \= O2
+```
+
+Treat domain constraints as closed-world by default: absence is a violation
+only inside an explicitly declared finite model. Mark open-world inputs
+explicitly instead of inferring completeness from missing facts. These
+predicates are not enforced schema; unknown predicates remain the escape hatch.
+Use `why` on derived violations before presenting them.
+
 ## Shared vocabulary
 
 These predicates are conventions, not enforced schema. Use them so later agents can query the same concepts:
