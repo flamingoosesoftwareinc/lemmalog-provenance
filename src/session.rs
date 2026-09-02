@@ -254,16 +254,18 @@ impl PersistentSession {
 
     /// Execute one command and durably commit successful mutations.
     pub fn execute(&mut self, line: &str) -> String {
-        if let Some(batch) = line.strip_prefix("rm ").map(str::trim) {
-            if self
-                .memory
-                .engine
-                .rule_batches
-                .iter()
-                .any(|(id, source, _)| id == batch && source == crate::DEFAULT_RULES)
-            {
-                return "error: cannot uninstall built-in rule batch\n".to_string();
-            }
+        let builtin_removal = line
+            .strip_prefix("rm ")
+            .map(str::trim)
+            .is_some_and(|batch| {
+                self.memory
+                    .engine
+                    .rule_batches
+                    .iter()
+                    .any(|(id, source, _)| id == batch && source == crate::DEFAULT_RULES)
+            });
+        if builtin_removal {
+            return "error: cannot uninstall built-in rule batch\n".to_string();
         }
         let mutating = matches!(
             line.split_whitespace().next(),
@@ -273,10 +275,13 @@ impl PersistentSession {
         let mut session = Session { engine };
         let output = session.execute(line);
         self.memory.engine = session.engine;
-        if mutating && !output.starts_with("error:") {
-            if let Err(error) = self.save() {
-                return format!("error: save snapshot: {error}\n");
-            }
+        let save_error = if mutating && !output.starts_with("error:") {
+            self.save().err()
+        } else {
+            None
+        };
+        if let Some(error) = save_error {
+            return format!("error: save snapshot: {error}\n");
         }
         output
     }

@@ -170,7 +170,7 @@ fn parse_line(raw: &str, default_confidence: f64) -> Result<CandidateFact, Strin
 
 /// Line protocol shared by mock and LLM extractors: each line is
 /// `S --rel--> O` with optional per-fact confidence `S --rel[0.8]--> O`.
-/// Unparseable lines are skipped (extraction is best-effort).
+/// Unparsable lines are skipped (extraction is best-effort).
 pub fn parse_protocol(text: &str, default_confidence: f64) -> Vec<CandidateFact> {
     text.lines()
         .filter_map(|l| parse_line(l, default_confidence).ok())
