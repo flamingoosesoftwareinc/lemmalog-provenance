@@ -49,7 +49,7 @@ re-deriving them (or worse, re-reasoning them in-context).
 | Streaming change feed: `Added`/`Retracted`/`Cleared` events for projections | ✅ |
 | Indexed read paths: `query`/`ask` select buckets (point lookups ~100µs at 4M facts) | ✅ |
 | Differential testing: 450 random programs vs a naive fixpoint oracle + parser fuzzing | ✅ |
-| REPL: `cargo run --bin lemmalog` (rule / + / ? / ?? / why / run / dump / batches) | ✅ |
+| Persistent Datalog REPL: `lemmalog` / `lemmalog repl` (rule / + / ? / ?? / why / run / dump / batches) | ✅ |
 | Leapfrog triejoins (worst-case-optimal joins), DBSP streaming deltas | 🚧 future phases |
 
 ## Entity resolution (canonicalization)
@@ -754,8 +754,26 @@ permalinks that open the exact cited source; GitHub, GitLab, Bitbucket, and
 editor URL formats differ. Stores live under the user data directory, outside
 the workspace.
 
+The bare `lemmalog` command starts the persistent line-oriented Datalog REPL;
+`lemmalog repl` is an explicit alias. It resolves the current workspace,
+loads its snapshot, and saves successful `rule`, `+`, `run`, `now`, and `rm`
+commands atomically. `+` accepts arbitrary ground Datalog facts with optional
+confidence and provenance, while `rule` installs facts or consistency rules.
+Derived relations are rebuilt after restart, and `why` retains provenance.
+The REPL takes an exclusive snapshot lock so concurrent writers are rejected.
+
 ```sh
-cargo run --bin lemmalog          # interactive REPL (or pipe a script)
+printf '%s\n' \
+  '+ entity("Order") #spec-1' \
+  '+ command("CancelOrder") #spec-1' \
+  'rule known(E) :- entity(E)' \
+  'run' \
+  '? known(E)' \
+  'exit' | lemmalog
+```
+
+```sh
+cargo run --bin lemmalog          # persistent interactive REPL (or pipe a script)
 cargo test                         # run the complete test suite
 cargo run --example agent_memory   # engine-level demo
 cargo run --example agent_session  # full agent loop incl. ask_deep + news

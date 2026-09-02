@@ -1,7 +1,7 @@
 //! Workspace-aware command-line access to Lemmalog memory.
 //!
-//! The CLI is deliberately a one-shot boundary: resolve one workspace,
-//! load its snapshot, perform one operation, save mutations, and exit.
+//! One-shot CLI commands and the workspace-backed persistent REPL share one
+//! context boundary: resolve one workspace, load its snapshot, and save mutations.
 
 use crate::presentation::SearchFormat;
 use crate::session::{PersistentSession, SnapshotLock};

@@ -78,6 +78,29 @@ The skill is embedded in the binary. `skill install` writes or updates `~/.agent
 
    Validate the cited source when it is available. Present the relevant provenance URI with every user-facing claim taken from Lemmalog; do not present stored or derived facts as uncited knowledge.
 
+## Direct Datalog modeling
+
+The bare `lemmalog` command is a persistent line-oriented Datalog REPL;
+`lemmalog repl` is an explicit alias. It loads the resolved workspace snapshot
+and saves successful mutations. Use it for deliberate domain conventions and
+consistency rules when the normal arrow observation path is too narrow:
+
+```sh
+printf '%s\n' \
+  '+ entity("Order") #spec-1' \
+  '+ command("CancelOrder") #spec-1' \
+  'rule known(E) :- entity(E)' \
+  'run' \
+  '? known(E)' \
+  'exit' | lemmalog
+```
+
+The REPL supports `rule <clause>`, `+ <ground-fact> [@confidence] [#provenance]`,
+`?`, `??`, `why`, `run`, `now`, `dump`, `batches`, and `rm`. Facts and rules
+are workspace-scoped by the selected context; derived relations rebuild after
+restart, and `why` retains opaque provenance. Use the normal CLI search/query/
+why flow for discovery. Do not put raw Datalog programs into `observe`.
+
 ## Shared vocabulary
 
 These predicates are conventions, not enforced schema. Use them so later agents can query the same concepts:
