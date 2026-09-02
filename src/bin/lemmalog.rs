@@ -12,7 +12,7 @@ fn main() {
         std::process::exit(lemmalog::cli::run(args));
     }
     if args[0].starts_with('-') {
-        std::process::exit(lemmalog::cli::run_repl(args.into_iter()));
+        std::process::exit(lemmalog::cli::run_repl(args));
     }
     std::process::exit(lemmalog::cli::run(args));
 }
