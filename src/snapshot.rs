@@ -23,6 +23,7 @@ pub(crate) enum SnapshotValue {
 pub(crate) enum SnapshotRecord {
     Now(i64),
     Rules(String),
+    RuleBatch(String),
     Episode {
         id: String,
         timestamp: i64,
@@ -169,6 +170,7 @@ fn parse_record(
             .map(SnapshotRecord::Now)
             .map_err(|_| malformed(format!("invalid NOW value {rest:?}"))),
         "RULES" => Ok(SnapshotRecord::Rules(unescape(rest, version))),
+        "BATCH" => Ok(SnapshotRecord::RuleBatch(unescape(rest, version))),
         "EP" => {
             let mut fields = rest.splitn(4, '\t');
             let (Some(id), Some(timestamp), Some(speaker), Some(text)) =

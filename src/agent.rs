@@ -301,7 +301,6 @@ pub struct AgentMemory<X: Extractor> {
     /// Epoch of the last completed `maintain()`; `context()` reports
     /// memory changes since then.
     last_turn_epoch: u64,
-    extra_rules: String,
     hyp_counter: u64,
 }
 
@@ -328,7 +327,6 @@ impl<X: Extractor> AgentMemory<X> {
             escalations: Vec::new(),
             episode_counter: 0,
             last_turn_epoch: 0,
-            extra_rules: extra_rules.to_string(),
             hyp_counter: 0,
         })
     }
@@ -842,7 +840,24 @@ pub fn assemble_context(
         let v = engine.sym_of(name);
         relevant.extend(engine.query("current", &[Some(v), None, None]));
     }
-    relevant.sort_by(|a, b| b.1.conf.partial_cmp(&a.1.conf).unwrap_or(std::cmp::Ordering::Equal));
+    relevant.sort_by(|a, b| {
+        b.1.conf
+            .partial_cmp(&a.1.conf)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                let left: Vec<String> = a
+                    .0
+                    .iter()
+                    .map(|value| engine.interner.display(value))
+                    .collect();
+                let right: Vec<String> = b
+                    .0
+                    .iter()
+                    .map(|value| engine.interner.display(value))
+                    .collect();
+                left.cmp(&right)
+            })
+    });
 
     let distilled_budget = (budget_tokens * 4 * 6 / 10).max(0);
     let mut distilled = String::new();
@@ -930,7 +945,16 @@ impl<X: Extractor> AgentMemory<X> {
         let mut out = BufWriter::new(file);
         writeln!(out, "{SNAPSHOT_MAGIC}")?;
         writeln!(out, "NOW\t{}", self.engine.now)?;
-        writeln!(out, "RULES\t{}", escape(&self.extra_rules))?;
+        // Runtime rule batches are persisted individually so `rm <id>`
+        // remains meaningful after a restart. The first batch is the
+        // built-in default program installed by `AgentMemory::new()`.
+        writeln!(out, "RULES\t")?;
+        for (index, (_, source, _)) in self.engine.rule_batches.iter().enumerate() {
+            if index == 0 && source == crate::agent::DEFAULT_RULES {
+                continue;
+            }
+            writeln!(out, "BATCH\t{}", escape(source))?;
+        }
         for ep in &self.episodes {
             writeln!(
                 out,
@@ -945,12 +969,15 @@ impl<X: Extractor> AgentMemory<X> {
             writeln!(out, "ESC\t{}", escape(e))?;
         }
         for (pred, rel) in &self.engine.relations {
-            // base facts only: skip predicates defined by rules (they are
-            // either program facts re-declared from rules, or derived)
-            if self.engine.clauses.iter().any(|c| c.head.pred == *pred) {
-                continue;
-            }
             for row in &rel.rows {
+                if !row
+                    .fact
+                    .supports
+                    .iter()
+                    .any(|support| matches!(support, crate::eval::Support::Base))
+                {
+                    continue;
+                }
                 let provenance = encode_provenance(row.fact.ann.prov.iter());
                 let args = row
                     .key
@@ -990,9 +1017,23 @@ impl<X: Extractor> AgentMemory<X> {
             Some(SnapshotRecord::Rules(rules)) => rules,
             _ => return Err("snapshot is missing its RULES record".into()),
         };
-        let mut memory = AgentMemory::new(extractor, &rules)?;
+        let records: Vec<SnapshotRecord> = records.collect::<Result<_, _>>()?;
+        let batches: Vec<String> = records
+            .iter()
+            .filter_map(|record| match record {
+                SnapshotRecord::RuleBatch(source) => Some(source.clone()),
+                _ => None,
+            })
+            .collect();
+        let mut memory = AgentMemory::new(
+            extractor,
+            if batches.is_empty() { &rules } else { "" },
+        )?;
+        for source in batches {
+            memory.engine.install_program(&source)?;
+        }
         for record in records {
-            match record? {
+            match record {
                 SnapshotRecord::Episode {
                     id,
                     timestamp,
@@ -1027,6 +1068,7 @@ impl<X: Extractor> AgentMemory<X> {
                 SnapshotRecord::Now(_) | SnapshotRecord::Rules(_) => {
                     return Err("snapshot contains a duplicate header record".into());
                 }
+                SnapshotRecord::RuleBatch(_) => {}
             }
         }
         memory.episode_counter = memory.episodes.len() as u64;

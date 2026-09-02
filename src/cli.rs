@@ -4,10 +4,11 @@
 //! load its snapshot, perform one operation, save mutations, and exit.
 
 use crate::presentation::SearchFormat;
+use crate::session::{PersistentSession, SnapshotLock};
 use crate::{AgentMemory, MockExtractor};
 use std::collections::BTreeMap;
 use std::env;
-use std::io::IsTerminal;
+use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -15,7 +16,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const EMBEDDED_SKILL: &str = include_str!("../skills/lemmalog/SKILL.md");
 
 const USAGE: &str = "Usage:
-  lemmalog                         start the interactive REPL
+  lemmalog                         start the persistent interactive REPL
+  lemmalog repl [<path>]            explicit spelling of the persistent REPL
   lemmalog observe [<path>] <facts> [options]
   lemmalog search [<path>] <pattern> [options]
   lemmalog query [<path>] <goal> [options]
@@ -72,6 +74,76 @@ enum Scope {
     All,
     Repository,
     Workspace,
+}
+
+/// Run the persistent line-oriented REPL. The binary calls this for both
+/// bare `lemmalog` and the explicit `lemmalog repl` spelling.
+pub fn run_repl(args: impl IntoIterator<Item = String>) -> i32 {
+    match persistent_repl(args.into_iter().collect()) {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("lemmalog: repl: {error}");
+            eprintln!("{USAGE}");
+            2
+        }
+    }
+}
+
+fn persistent_repl(args: Vec<String>) -> Result<(), String> {
+    let (path, workspace_override) = parse_repl_args(&args)?;
+    let context = resolve_context(&path, workspace_override.as_deref())?;
+    let _lock = SnapshotLock::acquire(&context.workspace.snapshot)?;
+    let mut session = PersistentSession::open(&context.workspace.snapshot)?;
+    let interactive = std::io::stdin().is_terminal();
+    if interactive {
+        println!("lemmalog — persistent datalog memory (help for commands)");
+    }
+    let stdin = std::io::stdin();
+    for line in stdin.lock().lines() {
+        let line = line.map_err(|error| format!("read stdin: {error}"))?;
+        if line.trim() == "quit" || line.trim() == "exit" {
+            break;
+        }
+        let output = session.execute(&line);
+        if !output.is_empty() {
+            print!("{output}");
+        }
+        std::io::stdout()
+            .flush()
+            .map_err(|error| format!("flush stdout: {error}"))?;
+    }
+    Ok(())
+}
+
+fn parse_repl_args(args: &[String]) -> Result<(PathBuf, Option<PathBuf>), String> {
+    let mut positional = Vec::new();
+    let mut workspace = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--workspace" => {
+                index += 1;
+                workspace = Some(PathBuf::from(
+                    args.get(index).ok_or("--workspace requires a path")?,
+                ));
+            }
+            "--" => positional.extend(args[index + 1..].iter().cloned()),
+            option if option.starts_with('-') => {
+                return Err(format!("unknown repl option {option:?}"));
+            }
+            _ => positional.push(args[index].clone()),
+        }
+        index += 1;
+    }
+    if positional.len() > 1 {
+        return Err("repl accepts at most one target path".to_string());
+    }
+    let path = positional
+        .into_iter()
+        .next()
+        .map(PathBuf::from)
+        .unwrap_or(env::current_dir().map_err(|error| format!("current directory: {error}"))?);
+    Ok((path, workspace))
 }
 
 pub fn run(args: impl IntoIterator<Item = String>) -> i32 {

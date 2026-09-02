@@ -20,7 +20,9 @@
 use crate::ast::parse_program;
 use crate::eval::{Ann, Engine};
 use crate::intern::Value;
+use crate::{AgentMemory, MockExtractor};
 use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
 
 pub struct Session {
     pub engine: Engine,
@@ -56,7 +58,11 @@ impl Session {
             "?" => self.query(rest, false),
             "??" => self.query(rest, true),
             "why" => self.why(rest),
-            "run" => Ok(format!("+{} facts (epoch {})\n", self.engine.run(), self.engine.epoch())),
+            "run" => Ok(format!(
+                "+{} facts (epoch {})\n",
+                self.engine.run(),
+                self.engine.epoch()
+            )),
             "now" => match rest.parse::<i64>() {
                 Ok(t) => {
                     self.engine.set_now(t);
@@ -219,5 +225,129 @@ impl Session {
             out.push_str("(empty)\n");
         }
         out
+    }
+}
+
+/// A workspace-backed REPL session. The command surface is shared with
+/// `Session`; only the state owner and save boundary differ.
+pub struct PersistentSession {
+    memory: AgentMemory<MockExtractor>,
+    path: PathBuf,
+}
+
+impl PersistentSession {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, String> {
+        let path = path.as_ref().to_path_buf();
+        let memory = if path.exists() {
+            AgentMemory::load(
+                MockExtractor::new(0.9),
+                path.to_str()
+                    .ok_or_else(|| "snapshot path is not UTF-8".to_string())?,
+            )
+            .map_err(|error| format!("load snapshot: {error}"))?
+        } else {
+            AgentMemory::new(MockExtractor::new(0.9), "")
+                .map_err(|error| format!("create memory: {error}"))?
+        };
+        Ok(Self { memory, path })
+    }
+
+    /// Execute one command and durably commit successful mutations.
+    pub fn execute(&mut self, line: &str) -> String {
+        if let Some(batch) = line.strip_prefix("rm ").map(str::trim) {
+            if self
+                .memory
+                .engine
+                .rule_batches
+                .iter()
+                .any(|(id, source, _)| id == batch && source == crate::DEFAULT_RULES)
+            {
+                return "error: cannot uninstall built-in rule batch\n".to_string();
+            }
+        }
+        let mutating = matches!(
+            line.split_whitespace().next(),
+            Some("rule" | "+" | "run" | "now" | "rm")
+        );
+        let engine = std::mem::replace(&mut self.memory.engine, crate::eval::Engine::new());
+        let mut session = Session { engine };
+        let output = session.execute(line);
+        self.memory.engine = session.engine;
+        if mutating && !output.starts_with("error:") {
+            if let Err(error) = self.save() {
+                return format!("error: save snapshot: {error}\n");
+            }
+        }
+        output
+    }
+
+    pub fn save(&self) -> Result<(), String> {
+        let parent = self
+            .path
+            .parent()
+            .ok_or_else(|| "snapshot path has no parent".to_string())?;
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        let file_name = self
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| "snapshot path has no UTF-8 file name".to_string())?;
+        let temporary = parent.join(format!(".{file_name}.tmp-{}", std::process::id()));
+        let result = self
+            .memory
+            .save(
+                temporary
+                    .to_str()
+                    .ok_or_else(|| "temporary path is not UTF-8".to_string())?,
+            )
+            .map_err(|error| error.to_string())
+            .and_then(|_| {
+                std::fs::rename(&temporary, &self.path).map_err(|error| error.to_string())
+            });
+        if result.is_err() {
+            let _ = std::fs::remove_file(&temporary);
+        }
+        result
+    }
+}
+
+/// Exclusive process lock for a persistent REPL snapshot.
+pub struct SnapshotLock {
+    path: PathBuf,
+    _file: std::fs::File,
+}
+
+impl SnapshotLock {
+    pub fn acquire(snapshot: impl AsRef<Path>) -> Result<Self, String> {
+        let snapshot = snapshot.as_ref();
+        let parent = snapshot
+            .parent()
+            .ok_or_else(|| "snapshot path has no parent".to_string())?;
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        let lock_path = snapshot.with_extension("lock");
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+            .map_err(|error| {
+                if error.kind() == std::io::ErrorKind::AlreadyExists {
+                    format!(
+                        "snapshot is locked by another REPL: {}",
+                        lock_path.display()
+                    )
+                } else {
+                    format!("acquire snapshot lock {}: {error}", lock_path.display())
+                }
+            })?;
+        Ok(Self {
+            path: lock_path,
+            _file: file,
+        })
+    }
+}
+
+impl Drop for SnapshotLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
     }
 }

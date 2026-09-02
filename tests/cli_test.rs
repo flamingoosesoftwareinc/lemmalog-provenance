@@ -1,5 +1,6 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temp_root(name: &str) -> PathBuf {
@@ -37,6 +38,123 @@ fn repository(root: &Path, remote: &str) -> PathBuf {
 
 fn cli() -> Command {
     Command::new(env!("CARGO_BIN_EXE_lemmalog"))
+}
+
+fn repl(root: &Path, data: &Path, explicit: bool, commands: &[&str]) -> std::process::Output {
+    let mut child = cli()
+        .env("XDG_DATA_HOME", data)
+        .args(if explicit {
+            vec![
+                "repl".to_string(),
+                "--workspace".to_string(),
+                root.display().to_string(),
+            ]
+        } else {
+            vec!["--workspace".to_string(), root.display().to_string()]
+        })
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    {
+        let stdin = child.stdin.as_mut().unwrap();
+        for command in commands {
+            writeln!(stdin, "{command}").unwrap();
+        }
+    }
+    child.wait_with_output().unwrap()
+}
+
+#[test]
+fn persistent_repl_roundtrips_convention_facts_rules_and_provenance() {
+    let root = temp_root("persistent-repl");
+    let workspace = root.join("workspace");
+    let data = root.join("data");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(workspace.join(".lemmalog"), "id = \"domain-repl\"\n").unwrap();
+
+    let observed = cli()
+        .env("XDG_DATA_HOME", &data)
+        .args([
+            "observe",
+            workspace.to_str().unwrap(),
+            "alice --works_at--> acme",
+            "--ts",
+            "100",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        observed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&observed.stderr)
+    );
+
+    let first = repl(
+        &workspace,
+        &data,
+        false,
+        &[
+            "? current(\"alice\", \"works_at\", O)",
+            "+ entity(\"Order\") #spec-1",
+            "+ state(\"Order\", \"paid\") #spec-1",
+            "rule known(E) :- entity(E)",
+            "run",
+            "? known(E)",
+            "exit",
+        ],
+    );
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert!(String::from_utf8_lossy(&first.stdout).contains("E=Order"));
+
+    let second = repl(
+        &workspace,
+        &data,
+        true,
+        &[
+            "? entity(E)",
+            "? known(E)",
+            "why entity(\"Order\")",
+            "batches",
+            "exit",
+        ],
+    );
+    assert!(
+        second.status.success(),
+        "{}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    let output = String::from_utf8(second.stdout).unwrap();
+    assert_eq!(output.matches("E=Order").count(), 2);
+    assert!(output.contains("prov [\"spec-1\"]"));
+    assert!(output.contains("b0:") && output.contains("b1: known(E)"));
+
+    let rejected = repl(&workspace, &data, false, &["rm b0", "exit"]);
+    assert!(rejected.status.success());
+    assert_eq!(
+        String::from_utf8(rejected.stdout).unwrap(),
+        "error: cannot uninstall built-in rule batch\n"
+    );
+
+    let third = repl(&workspace, &data, false, &["rm b1", "exit"]);
+    assert!(third.status.success());
+    let fourth = repl(&workspace, &data, false, &["? known(E)", "exit"]);
+    assert!(fourth.status.success());
+    assert_eq!(
+        String::from_utf8(fourth.stdout).unwrap().trim(),
+        "(no answers)"
+    );
+    assert!(!data
+        .join("lemmalog/workspaces")
+        .join("unused.lock")
+        .exists());
+
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
